@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: "Microgramma";
+  src:
+    url("/fonts/MicrogrammaDBolExt.otf") format("opentype"),
+    url("/fonts/Microgramma%20D%20Extended%20Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Microgramma";
+  src:
+    url("/fonts/MicrogrammaDMedExt.otf") format("opentype"),
+    url("/fonts/Microgramma%20D%20Extended%20Medium.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  background: #0d0d0d;
+  color: #e8e4dc;
+  font-family: var(--font-dm-mono), monospace;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+.font-microgramma {
+  font-family: "Microgramma", "Eurostile", sans-serif !important;
+}
