@@ -175,6 +175,7 @@ export const ExerciseDetail = ({
   const [activeTabExerciseId, setActiveTabExerciseId] = useState(target.exerciseId);
   const [pendingLink, setPendingLink] = useState("");
   const [setDeleteDialog, setSetDeleteDialog] = useState<{ setId: string; setNumber: number } | null>(null);
+  const [completionError, setCompletionError] = useState<string | null>(null);
 
   const explanationRef = useRef<HTMLDivElement>(null);
 
@@ -185,6 +186,7 @@ export const ExerciseDetail = ({
     setActionPanel("none");
     setShowExplanation(false);
     setSetDeleteDialog(null);
+    setCompletionError(null);
   }, [target.exerciseId, target.type]);
 
   useEffect(() => {
@@ -263,33 +265,44 @@ export const ExerciseDetail = ({
     setActionPanel((previous) => (previous === panel ? "none" : panel));
   };
 
-  const saveCurrentSet = async () => {
+  const saveCurrentSet = async (): Promise<boolean> => {
     if (!activeExercise) {
-      return;
+      return false;
     }
 
     const pendingSet = activeExercise.sets.find((set) => !set.completed);
     if (!pendingSet) {
-      return;
+      return false;
+    }
+
+    if (pendingSet.reps === null || pendingSet.reps <= 0) {
+      setCompletionError("Reps must be greater than 0 to log a completed set.");
+      return false;
     }
 
     const completedAt = new Date().toISOString();
 
-    await onSaveSet({
-      workoutExerciseId: activeExercise.id,
-      setId: pendingSet.id,
-      setNumber: pendingSet.setNumber,
-      setType: pendingSet.setType,
-      weightLbs: pendingSet.weightLbs,
-      reps: pendingSet.reps,
-      completed: true,
-      completedAt
-    });
+    try {
+      await onSaveSet({
+        workoutExerciseId: activeExercise.id,
+        setId: pendingSet.id,
+        setNumber: pendingSet.setNumber,
+        setType: pendingSet.setType,
+        weightLbs: pendingSet.weightLbs,
+        reps: pendingSet.reps,
+        completed: true,
+        completedAt
+      });
+    } catch {
+      setCompletionError("Unable to log set right now. Please try again.");
+      return false;
+    }
 
     onUpdateSet(activeExercise.id, pendingSet.id, {
       completed: true,
       completedAt
     });
+    setCompletionError(null);
 
     if (target.type === "superset" && supersetExerciseIds.length > 1) {
       const currentTabIndex = supersetExerciseIds.findIndex((exerciseId) => exerciseId === activeExercise.id);
@@ -301,10 +314,11 @@ export const ExerciseDetail = ({
         setActiveTabExerciseId(supersetExerciseIds[currentTabIndex + 1]);
       }
 
-      return;
+      return true;
     }
 
     onStartRest(activeExercise.id, pendingSet.id, getRestByGoal(preferences.trainingGoal));
+    return true;
   };
 
   const primaryActionLabel = allTargetSetsCompleted
@@ -582,15 +596,24 @@ export const ExerciseDetail = ({
                 showSetTypeTags={preferences.showSetTypeTags}
                 preferredUnit={preferences.preferredUnit}
                 onChangeWeight={(weightLbs, edited) => {
+                  if (completionError) {
+                    setCompletionError(null);
+                  }
                   onUpdateSet(activeExercise.id, setRow.id, {
                     weightLbs,
                     weightEdited: edited
                   });
                 }}
                 onChangeReps={(reps) => {
+                  if (completionError) {
+                    setCompletionError(null);
+                  }
                   onUpdateSet(activeExercise.id, setRow.id, { reps });
                 }}
                 onChangeSetType={(setType) => {
+                  if (completionError) {
+                    setCompletionError(null);
+                  }
                   onUpdateSet(activeExercise.id, setRow.id, { setType });
                 }}
                 onDelete={() => {
@@ -660,6 +683,9 @@ export const ExerciseDetail = ({
         }`}
         style={{ paddingBottom: "max(10px, env(safe-area-inset-bottom))" }}
       >
+        {completionError ? (
+          <p className="mb-2 font-data text-[12px] text-[#b84040]">{completionError}</p>
+        ) : null}
         <button
           type="button"
           onClick={() => {

@@ -9,6 +9,37 @@ interface SupabaseConfig {
   anonKey: string;
 }
 
+interface SupabaseAuthErrorResponse {
+  error_description?: string;
+  msg?: string;
+  message?: string;
+  error?: string;
+}
+
+interface PasswordSignInResponse {
+  access_token?: string;
+  refresh_token?: string | null;
+  user?: {
+    id?: string;
+    email?: string | null;
+  };
+}
+
+interface UserProfileBootstrapRow {
+  id: string;
+  email: string;
+  is_disabled: boolean;
+}
+
+export interface AuthRedirectHashResult {
+  hasSession: boolean;
+  error: string | null;
+}
+
+export interface EnsureUserProfileResult {
+  isDisabled: boolean;
+}
+
 const getSupabaseConfig = (): SupabaseConfig => {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -104,6 +135,30 @@ export const getAccessToken = (): string | null => {
   return decodeURIComponent(cookieToken.split("=").slice(1).join("="));
 };
 
+const setStoredAccessToken = (accessToken: string, refreshToken?: string | null) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem("sb-access-token", accessToken);
+  window.localStorage.setItem(
+    "supabase.auth.token",
+    JSON.stringify({
+      access_token: accessToken,
+      refresh_token: refreshToken ?? null
+    })
+  );
+};
+
+const parseAuthErrorMessage = async (response: Response, fallback: string): Promise<string> => {
+  try {
+    const data = (await response.json()) as SupabaseAuthErrorResponse;
+    return data.error_description || data.msg || data.message || data.error || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 const buildHeaders = (token?: string | null, includeJson = true): HeadersInit => {
   const { anonKey } = getSupabaseConfig();
 
@@ -158,6 +213,120 @@ export const getAuthenticatedUser = async (): Promise<AdminAuthUser | null> => {
     id: data.id,
     email: data.email ?? ""
   };
+};
+
+export const signInWithEmailPassword = async (email: string, password: string): Promise<AdminAuthUser> => {
+  const normalizedEmail = email.trim();
+  if (!normalizedEmail || !password) {
+    throw new Error("EMAIL_AND_PASSWORD_REQUIRED");
+  }
+
+  const { url, anonKey } = getSupabaseConfig();
+  const response = await fetch(`${url}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: {
+      apikey: anonKey,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      email: normalizedEmail,
+      password
+    }),
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    const message = await parseAuthErrorMessage(response, "Unable to sign in with email and password.");
+    throw new Error(message);
+  }
+
+  const data = (await response.json()) as PasswordSignInResponse;
+  if (!data.access_token || !data.user?.id) {
+    throw new Error("INVALID_AUTH_RESPONSE");
+  }
+
+  setStoredAccessToken(data.access_token, data.refresh_token ?? null);
+
+  return {
+    id: data.user.id,
+    email: data.user.email ?? normalizedEmail
+  };
+};
+
+export const getOAuthAuthorizeUrl = (provider: string, redirectTo: string): string => {
+  const { url } = getSupabaseConfig();
+  const params = new URLSearchParams({
+    provider,
+    redirect_to: redirectTo,
+    response_type: "token"
+  });
+
+  return `${url}/auth/v1/authorize?${params.toString()}`;
+};
+
+export const consumeAuthRedirectHash = (): AuthRedirectHashResult => {
+  if (typeof window === "undefined") {
+    return { hasSession: false, error: null };
+  }
+
+  const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+  if (!hash) {
+    return { hasSession: false, error: null };
+  }
+
+  const params = new URLSearchParams(hash);
+  const error = params.get("error_description") || params.get("error");
+  const accessToken = params.get("access_token");
+  const refreshToken = params.get("refresh_token");
+
+  if (error) {
+    window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+    return { hasSession: false, error };
+  }
+
+  if (!accessToken) {
+    return { hasSession: false, error: null };
+  }
+
+  setStoredAccessToken(accessToken, refreshToken);
+  window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+  return { hasSession: true, error: null };
+};
+
+export const ensureUsersProfile = async (user: AdminAuthUser): Promise<EnsureUserProfileResult> => {
+  const existingProfile = await fetchSingleRow<UserProfileBootstrapRow>("users_profile", {
+    select: "id,email,is_disabled",
+    id: `eq.${user.id}`
+  });
+
+  if (existingProfile) {
+    return { isDisabled: existingProfile.is_disabled };
+  }
+
+  const normalizedEmail = user.email.trim();
+  if (!normalizedEmail) {
+    throw new Error("PROFILE_EMAIL_REQUIRED");
+  }
+
+  try {
+    await insertRow<UserProfileBootstrapRow>("users_profile", {
+      id: user.id,
+      email: normalizedEmail
+    });
+  } catch {
+    const racedProfile = await fetchSingleRow<UserProfileBootstrapRow>("users_profile", {
+      select: "id,email,is_disabled",
+      id: `eq.${user.id}`
+    });
+
+    if (!racedProfile) {
+      throw new Error("PROFILE_BOOTSTRAP_FAILED");
+    }
+
+    return { isDisabled: racedProfile.is_disabled };
+  }
+
+  return { isDisabled: false };
 };
 
 export const signOutAuth = async (): Promise<void> => {

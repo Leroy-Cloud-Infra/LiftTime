@@ -1,9 +1,24 @@
 import React, { useEffect, useMemo, useState } from "react";
 
+import { fetchRows } from "@/components/admin/supabaseClient";
 import { ExerciseRow } from "@/components/workout/ExerciseRow";
 import { SupersetRow } from "@/components/workout/SupersetRow";
 import { TimerStrip } from "@/components/workout/TimerStrip";
-import { ExerciseDetail } from "@/screens/workout/ExerciseDetail";
+import {
+  addSet as persistAddSet,
+  completeSet as persistCompleteSet,
+  deleteSet as persistDeleteSet,
+  deleteWorkoutExercises as persistDeleteWorkoutExercises,
+  loadOrCreateActiveSession,
+  reorderWorkoutExercises as persistReorderWorkoutExercises,
+  requireAuthenticatedUser,
+  type BootstrapWorkoutExerciseInput,
+  type DbExerciseCatalog,
+  type DbWorkoutExercise,
+  type DbWorkoutSet,
+  type LoadOrCreateSessionResult
+} from "@/components/workout/workoutDataClient";
+import { ExerciseDetail, type PersistSetPayload } from "@/screens/workout/ExerciseDetail";
 import { ExerciseDetailSheet } from "@/screens/workout/ExerciseDetailSheet";
 import type {
   DetailTarget,
@@ -338,6 +353,158 @@ const buildGroupedRows = (exerciseList: WorkoutExercise[]): OverviewRow[] => {
   return rows;
 };
 
+const STARTER_EXERCISE_SLUG_BY_TEMPLATE_ID: Record<string, string> = {
+  bench: "bench-press",
+  pullup: "pull-up",
+  curl: "bicep-curl",
+  pushdown: "tricep-pushdown"
+};
+
+const STARTER_EXERCISE_SLUGS = [
+  "bench-press",
+  "pull-up",
+  "bicep-curl",
+  "tricep-pushdown"
+] as const;
+
+interface StarterExerciseRow {
+  id: string;
+  slug: string;
+}
+
+const toWorkoutEquipment = (equipment: string[]): WorkoutExercise["equipment"] => {
+  if (equipment.includes("barbell")) {
+    return "barbell";
+  }
+
+  if (equipment.includes("bodyweight")) {
+    return "bodyweight";
+  }
+
+  if (equipment.includes("dumbbell")) {
+    return "dumbbell";
+  }
+
+  return "cable";
+};
+
+const toTitleCase = (value: string) => {
+  if (!value) {
+    return value;
+  }
+
+  return value[0].toUpperCase() + value.slice(1);
+};
+
+const buildBootstrapExercises = (
+  templateSession: WorkoutSession,
+  seededExerciseIdByTemplateId: Record<string, string>
+): BootstrapWorkoutExerciseInput[] => {
+  return sortedExercises(templateSession.exercises).map((exercise) => {
+    const seededExerciseId = seededExerciseIdByTemplateId[exercise.id];
+    if (!seededExerciseId) {
+      throw new Error(`MISSING_SEEDED_EXERCISE_FOR_TEMPLATE:${exercise.id}`);
+    }
+
+    return {
+      exerciseId: seededExerciseId,
+      orderIndex: exercise.order,
+      supersetGroupId: exercise.supersetGroupId,
+      sets: exercise.sets.map((setRow) => ({
+        setNumber: setRow.setNumber,
+        setType: setRow.setType,
+        weightLbs: setRow.weightLbs,
+        reps: setRow.reps,
+        completed: setRow.completed,
+        completedAt: setRow.completedAt
+      }))
+    };
+  });
+};
+
+const mapDbSessionToUi = (result: LoadOrCreateSessionResult): WorkoutSession => {
+  const setsByWorkoutExerciseId = result.workoutSets.reduce<Record<string, DbWorkoutSet[]>>((accumulator, setRow) => {
+    if (!accumulator[setRow.workout_exercise_id]) {
+      accumulator[setRow.workout_exercise_id] = [];
+    }
+
+    accumulator[setRow.workout_exercise_id].push(setRow);
+    return accumulator;
+  }, {});
+
+  const mapExercise = (workoutExercise: DbWorkoutExercise): WorkoutExercise => {
+    const catalog: DbExerciseCatalog | undefined = result.exercisesById[workoutExercise.exercise_id];
+    const setRows = [...(setsByWorkoutExerciseId[workoutExercise.id] ?? [])]
+      .sort((left, right) => left.set_number - right.set_number)
+      .map(
+        (setRow): ExerciseSet => ({
+          id: setRow.id,
+          setNumber: setRow.set_number,
+          weightLbs: setRow.weight_lbs,
+          reps: setRow.reps,
+          setType: setRow.set_type,
+          completed: setRow.completed,
+          completedAt: setRow.completed_at,
+          suggestionDirection: "hold",
+          weightEdited: false
+        })
+      );
+
+    const repRangeTop = setRows.reduce((max, row) => Math.max(max, row.reps ?? 0), 0) || 12;
+
+    return {
+      id: workoutExercise.id,
+      name: catalog?.name ?? "Exercise",
+      equipment: toWorkoutEquipment(catalog?.equipment ?? []),
+      order: workoutExercise.order_index,
+      supersetGroupId: workoutExercise.superset_group_id,
+      sets: setRows,
+      repRangeTop,
+      muscleGroups: (catalog?.muscle_groups ?? []).map(toTitleCase),
+      notes: catalog?.progressive_overload_notes ?? "",
+      instructions: (catalog?.instructions ?? []).join(" "),
+      links: []
+    };
+  };
+
+  const exercises = [...result.workoutExercises].sort((left, right) => left.order_index - right.order_index).map(mapExercise);
+
+  const groupMap = new Map<string, string[]>();
+  exercises.forEach((exercise) => {
+    if (!exercise.supersetGroupId) {
+      return;
+    }
+
+    if (!groupMap.has(exercise.supersetGroupId)) {
+      groupMap.set(exercise.supersetGroupId, []);
+    }
+
+    groupMap.get(exercise.supersetGroupId)?.push(exercise.id);
+  });
+
+  const supersetGroups = [...groupMap.entries()]
+    .filter(([, exerciseIds]) => exerciseIds.length >= 2)
+    .map(([id, exerciseIds]) => ({
+      id,
+      exerciseIds: [exerciseIds[0], exerciseIds[1]] as [string, string]
+    }));
+
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(result.session.started_at).getTime()) / 1000)
+  );
+
+  return {
+    id: result.session.id,
+    name: result.session.name,
+    startedAt: result.session.started_at,
+    elapsedSeconds,
+    restTimer: null,
+    exercises,
+    supersetGroups
+  };
+};
+
 const compoundMusclePriority = new Set(["chest", "back", "quads", "hamstrings", "shoulders"]);
 const isolationMusclePriority = new Set(["biceps", "triceps", "calves", "forearms"]);
 
@@ -356,6 +523,10 @@ const getMusclePriorityScore = (muscleGroup: string) => {
 
 export const SessionOverview = () => {
   const [session, setSession] = useState<WorkoutSession>(() => createMockSession());
+  const [isSessionLoading, setIsSessionLoading] = useState(true);
+  const [isAuthBlocked, setIsAuthBlocked] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [preferences] = useState<WorkoutPreferences>(() => getStoredPreferences());
   const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
   const [isDesktop, setIsDesktop] = useState(false);
@@ -375,6 +546,84 @@ export const SessionOverview = () => {
     sync();
     media.addEventListener("change", sync);
     return () => media.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadSession = async () => {
+      setIsSessionLoading(true);
+      setSessionError(null);
+
+      try {
+        const authUser = await requireAuthenticatedUser();
+
+        const starterRows = await fetchRows<StarterExerciseRow>("exercises", {
+          select: "id,slug",
+          slug: `in.(${STARTER_EXERCISE_SLUGS.join(",")})`
+        });
+
+        const starterIdBySlug = starterRows.reduce<Record<string, string>>((accumulator, row) => {
+          accumulator[row.slug] = row.id;
+          return accumulator;
+        }, {});
+
+        for (const slug of STARTER_EXERCISE_SLUGS) {
+          if (!starterIdBySlug[slug]) {
+            throw new Error(`MISSING_STARTER_EXERCISE:${slug}`);
+          }
+        }
+
+        const template = createMockSession();
+        const seededExerciseIdByTemplateId = Object.entries(STARTER_EXERCISE_SLUG_BY_TEMPLATE_ID).reduce<
+          Record<string, string>
+        >((accumulator, [templateId, slug]) => {
+          const seededId = starterIdBySlug[slug];
+          if (!seededId) {
+            throw new Error(`MISSING_STARTER_EXERCISE:${slug}`);
+          }
+
+          accumulator[templateId] = seededId;
+          return accumulator;
+        }, {});
+
+        const bootstrapExercises = buildBootstrapExercises(template, seededExerciseIdByTemplateId);
+
+        const loaded = await loadOrCreateActiveSession({
+          userId: authUser.id,
+          name: template.name,
+          bootstrapExercises
+        });
+
+        if (!active) {
+          return;
+        }
+
+        setSession(mapDbSessionToUi(loaded));
+      } catch (loadError) {
+        if (!active) {
+          return;
+        }
+
+        const message = loadError instanceof Error ? loadError.message : "Failed to load workout session.";
+        if (message === "AUTH_REQUIRED") {
+          setIsAuthBlocked(true);
+          return;
+        }
+
+        setSessionError(message);
+      } finally {
+        if (active) {
+          setIsSessionLoading(false);
+        }
+      }
+    };
+
+    void loadSession();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -462,55 +711,87 @@ export const SessionOverview = () => {
   };
 
   const deleteSet = (exerciseId: string, setId: string) => {
-    setSession((previous) => ({
-      ...previous,
-      exercises: previous.exercises.map((exercise) => {
-        if (exercise.id !== exerciseId) {
-          return exercise;
-        }
+    void (async () => {
+      try {
+        await persistDeleteSet({
+          workoutExerciseId: exerciseId,
+          setId
+        });
 
-        const nextSets = exercise.sets
-          .filter((set) => set.id !== setId)
-          .map((set, index) => ({ ...set, setNumber: index + 1 }));
+        setSession((previous) => ({
+          ...previous,
+          exercises: previous.exercises.map((exercise) => {
+            if (exercise.id !== exerciseId) {
+              return exercise;
+            }
 
-        return {
-          ...exercise,
-          sets: nextSets
-        };
-      })
-    }));
+            const nextSets = exercise.sets
+              .filter((set) => set.id !== setId)
+              .map((set, index) => ({ ...set, setNumber: index + 1 }));
+
+            return {
+              ...exercise,
+              sets: nextSets
+            };
+          })
+        }));
+        setPersistenceError(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to delete set.";
+        setPersistenceError(message);
+      }
+    })();
   };
 
   const addSet = (exerciseId: string) => {
-    setSession((previous) => ({
-      ...previous,
-      exercises: previous.exercises.map((exercise) => {
-        if (exercise.id !== exerciseId) {
-          return exercise;
-        }
+    const targetExercise = session.exercises.find((exercise) => exercise.id === exerciseId);
+    if (!targetExercise) {
+      return;
+    }
 
-        const lastSet = exercise.sets[exercise.sets.length - 1] ?? null;
-        const nextSetNumber = exercise.sets.length + 1;
+    const lastSet = targetExercise.sets[targetExercise.sets.length - 1] ?? null;
 
-        return {
-          ...exercise,
-          sets: [
-            ...exercise.sets,
-            {
-              id: `${exerciseId}-set-${Date.now()}-${nextSetNumber}`,
-              setNumber: nextSetNumber,
-              weightLbs: lastSet?.weightLbs ?? null,
-              reps: lastSet?.reps ?? null,
-              setType: getSetTypeForNewSet(),
-              completed: false,
-              completedAt: null,
-              suggestionDirection: lastSet?.suggestionDirection ?? "hold",
-              weightEdited: false
+    void (async () => {
+      try {
+        const createdSet = await persistAddSet({
+          workoutExerciseId: exerciseId,
+          weightLbs: lastSet?.weightLbs ?? null,
+          reps: lastSet?.reps ?? null,
+          setType: getSetTypeForNewSet()
+        });
+
+        setSession((previous) => ({
+          ...previous,
+          exercises: previous.exercises.map((exercise) => {
+            if (exercise.id !== exerciseId) {
+              return exercise;
             }
-          ]
-        };
-      })
-    }));
+
+            return {
+              ...exercise,
+              sets: [
+                ...exercise.sets,
+                {
+                  id: createdSet.id,
+                  setNumber: createdSet.set_number,
+                  weightLbs: createdSet.weight_lbs,
+                  reps: createdSet.reps,
+                  setType: createdSet.set_type,
+                  completed: createdSet.completed,
+                  completedAt: createdSet.completed_at,
+                  suggestionDirection: lastSet?.suggestionDirection ?? "hold",
+                  weightEdited: false
+                }
+              ]
+            };
+          })
+        }));
+        setPersistenceError(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to add set.";
+        setPersistenceError(message);
+      }
+    })();
   };
 
   const updateExerciseNotes = (exerciseId: string, notes: string) => {
@@ -576,8 +857,16 @@ export const SessionOverview = () => {
     setSession((previous) => ({ ...previous, restTimer: null }));
   };
 
-  const saveSet = async () => {
-    await Promise.resolve();
+  const saveSet = async (payload: PersistSetPayload) => {
+    await persistCompleteSet({
+      workoutExerciseId: payload.workoutExerciseId,
+      setId: payload.setId,
+      setNumber: payload.setNumber,
+      setType: payload.setType,
+      weightLbs: payload.weightLbs,
+      reps: payload.reps,
+      completedAt: payload.completedAt
+    });
   };
 
   const hasMoreExercisesFromTarget = (targetValue: DetailTarget) => {
@@ -635,6 +924,8 @@ export const SessionOverview = () => {
 
   const removeExercisesById = (ids: string[]) => {
     const toRemove = new Set(ids);
+    const removedIds = session.exercises.filter((exercise) => toRemove.has(exercise.id)).map((exercise) => exercise.id);
+
     setSession((previous) => {
       const nextExercises = previous.exercises
         .filter((exercise) => !toRemove.has(exercise.id))
@@ -649,6 +940,19 @@ export const SessionOverview = () => {
         supersetGroups: nextSupersets
       };
     });
+
+    void (async () => {
+      try {
+        await persistDeleteWorkoutExercises({
+          sessionId: session.id,
+          workoutExerciseIds: removedIds
+        });
+        setPersistenceError(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to delete exercise.";
+        setPersistenceError(message);
+      }
+    })();
   };
 
   const toggleRowSelection = (exerciseIds: string[]) => {
@@ -670,59 +974,73 @@ export const SessionOverview = () => {
       return;
     }
 
-    setSession((previous) => {
-      const ordered = sortedExercises(previous.exercises);
-      const prevInProgress = ordered.filter((exercise) => !isExerciseComplete(exercise));
-      const rows = buildGroupedRows(prevInProgress);
-      const sourceIndex = rows.findIndex((row) => getRowKey(row) === sourceRowKey);
-      const targetIndex = rows.findIndex((row) => getRowKey(row) === targetRowKey);
-      if (sourceIndex < 0 || targetIndex < 0) {
-        return previous;
+    const ordered = sortedExercises(session.exercises);
+    const prevInProgress = ordered.filter((exercise) => !isExerciseComplete(exercise));
+    const rows = buildGroupedRows(prevInProgress);
+    const sourceIndex = rows.findIndex((row) => getRowKey(row) === sourceRowKey);
+    const targetIndex = rows.findIndex((row) => getRowKey(row) === targetRowKey);
+    if (sourceIndex < 0 || targetIndex < 0) {
+      return;
+    }
+
+    const nextRows = [...rows];
+    const [moved] = nextRows.splice(sourceIndex, 1);
+    nextRows.splice(targetIndex, 0, moved);
+    const reorderedInProgressIds = nextRows.flatMap((row) => row.exerciseIds);
+
+    let inProgressIndex = 0;
+    const nextOrderIds = ordered.map((exercise) => {
+      if (isExerciseComplete(exercise)) {
+        return exercise.id;
       }
 
-      const nextRows = [...rows];
-      const [moved] = nextRows.splice(sourceIndex, 1);
-      nextRows.splice(targetIndex, 0, moved);
-      const reorderedInProgressIds = nextRows.flatMap((row) => row.exerciseIds);
-
-      let inProgressIndex = 0;
-      const nextOrderIds = ordered.map((exercise) => {
-        if (isExerciseComplete(exercise)) {
-          return exercise.id;
-        }
-
-        const nextId = reorderedInProgressIds[inProgressIndex] ?? exercise.id;
-        inProgressIndex += 1;
-        return nextId;
-      });
-
-      const exerciseById = previous.exercises.reduce<Record<string, WorkoutExercise>>((accumulator, exercise) => {
-        accumulator[exercise.id] = exercise;
-        return accumulator;
-      }, {});
-
-      const nextExercises: WorkoutExercise[] = [];
-      nextOrderIds.forEach((id, index) => {
-        const exercise = exerciseById[id];
-        if (!exercise) {
-          return;
-        }
-
-        nextExercises.push({
-          ...exercise,
-          order: index + 1
-        });
-      });
-
-      if (nextExercises.length !== previous.exercises.length) {
-        return previous;
-      }
-
-      return {
-        ...previous,
-        exercises: nextExercises
-      };
+      const nextId = reorderedInProgressIds[inProgressIndex] ?? exercise.id;
+      inProgressIndex += 1;
+      return nextId;
     });
+
+    const exerciseById = session.exercises.reduce<Record<string, WorkoutExercise>>((accumulator, exercise) => {
+      accumulator[exercise.id] = exercise;
+      return accumulator;
+    }, {});
+
+    const nextExercises: WorkoutExercise[] = [];
+    nextOrderIds.forEach((id, index) => {
+      const exercise = exerciseById[id];
+      if (!exercise) {
+        return;
+      }
+
+      nextExercises.push({
+        ...exercise,
+        order: index + 1
+      });
+    });
+
+    if (nextExercises.length !== session.exercises.length) {
+      return;
+    }
+
+    setSession((previous) => ({
+      ...previous,
+      exercises: nextExercises
+    }));
+
+    void (async () => {
+      try {
+        await persistReorderWorkoutExercises({
+          sessionId: session.id,
+          orderedWorkoutExerciseIds: nextExercises
+            .slice()
+            .sort((left, right) => left.order - right.order)
+            .map((exercise) => exercise.id)
+        });
+        setPersistenceError(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to reorder exercises.";
+        setPersistenceError(message);
+      }
+    })();
   };
 
   const onPressDeleteSelected = () => {
@@ -761,7 +1079,7 @@ export const SessionOverview = () => {
         setStubScreen("session-summary");
       }}
       onSaveSet={async (payload) => {
-        await saveSet();
+        await saveSet(payload);
         updateSet(payload.workoutExerciseId, payload.setId, {
           completed: true,
           completedAt: payload.completedAt
@@ -778,6 +1096,30 @@ export const SessionOverview = () => {
       onStopRest={stopRest}
     />
   ) : null;
+
+  if (isAuthBlocked) {
+    return (
+      <div className="flex h-dvh items-center justify-center bg-[#0d0d0d] px-4 text-center">
+        <p className="font-data text-[13px] text-[#8a8478]">Sign in is required to access the active workout.</p>
+      </div>
+    );
+  }
+
+  if (isSessionLoading) {
+    return (
+      <div className="flex h-dvh items-center justify-center bg-[#0d0d0d] px-4 text-center">
+        <p className="font-data text-[13px] text-[#8a8478]">Loading active workout...</p>
+      </div>
+    );
+  }
+
+  if (sessionError) {
+    return (
+      <div className="flex h-dvh items-center justify-center bg-[#0d0d0d] px-4 text-center">
+        <p className="font-data text-[13px] text-[#b84040]">{sessionError}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto h-dvh w-full max-w-[420px] bg-[#0d0d0d] text-[#e8e4dc]">
@@ -798,6 +1140,10 @@ export const SessionOverview = () => {
             {muscleGroupText}
           </p>
         </header>
+
+        {persistenceError ? (
+          <p className="mb-2 font-data text-[12px] text-[#b84040]">{persistenceError}</p>
+        ) : null}
 
         {session.restTimer?.active ? (
           <div className="mb-2 mt-0 rounded-[4px] border border-[#2e2e2e] border-l-[4px] border-l-[#c8922a] bg-[#2a1f0a] px-3 py-2">
