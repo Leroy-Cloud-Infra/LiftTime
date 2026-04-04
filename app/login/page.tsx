@@ -7,7 +7,6 @@ import {
   consumeAuthRedirectHash,
   ensureUsersProfile,
   getAuthenticatedUser,
-  getOAuthAuthorizeUrl,
   signInWithEmailPassword,
   signOutAuth
 } from "@/components/admin/supabaseClient";
@@ -47,7 +46,6 @@ export default function LoginPage() {
   const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const authentikProvider = process.env.NEXT_PUBLIC_AUTHENTIK_PROVIDER ?? "keycloak";
 
   const completeSignIn = async (authUser: AdminAuthUser): Promise<void> => {
     const profileResult = await ensureUsersProfile(authUser);
@@ -123,8 +121,10 @@ export default function LoginPage() {
 
   const onSignInWithAuthentik = () => {
     setAuthError(null);
-    const redirectTo = `${window.location.origin}/login`;
-    window.location.assign(getOAuthAuthorizeUrl(authentikProvider, redirectTo));
+    const params = new URLSearchParams({
+      returnTo: "/"
+    });
+    window.location.assign(`/api/auth/start?${params.toString()}`);
   };
 
   return (
