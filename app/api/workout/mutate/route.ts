@@ -57,6 +57,11 @@ interface WorkoutSetNumberRow {
   set_number: number;
 }
 
+interface WorkoutSetOrderRow {
+  id: string;
+  set_number: number;
+}
+
 interface WorkoutSetRecord {
   id: string;
   workout_exercise_id: string;
@@ -361,6 +366,102 @@ const insertSet = async (
   return created;
 };
 
+const deleteSetById = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  payload: DeleteSetPayload
+): Promise<boolean> => {
+  const response = await fetch(
+    buildRestUrl(supabaseUrl, "workout_sets", {
+      id: `eq.${payload.setId}`,
+      workout_exercise_id: `eq.${payload.workoutExerciseId}`
+    }),
+    {
+      method: "DELETE",
+      headers: {
+        ...createServiceHeaders(serviceRoleKey),
+        Prefer: "return=representation"
+      },
+      cache: "no-store"
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("WORKOUT_SET_DELETE_FAILED");
+  }
+
+  const rows = (await response.json()) as WorkoutSetRow[];
+  return Boolean(rows[0]);
+};
+
+const fetchSetOrderRows = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  workoutExerciseId: string
+): Promise<WorkoutSetOrderRow[]> => {
+  const response = await fetch(
+    buildRestUrl(supabaseUrl, "workout_sets", {
+      select: "id,set_number",
+      workout_exercise_id: `eq.${workoutExerciseId}`,
+      order: "set_number.asc"
+    }),
+    {
+      method: "GET",
+      headers: createServiceHeaders(serviceRoleKey, false),
+      cache: "no-store"
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("WORKOUT_SET_ORDER_FETCH_FAILED");
+  }
+
+  return (await response.json()) as WorkoutSetOrderRow[];
+};
+
+const updateSetNumber = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  workoutExerciseId: string,
+  setId: string,
+  setNumber: number
+): Promise<void> => {
+  const response = await fetch(
+    buildRestUrl(supabaseUrl, "workout_sets", {
+      id: `eq.${setId}`,
+      workout_exercise_id: `eq.${workoutExerciseId}`
+    }),
+    {
+      method: "PATCH",
+      headers: createServiceHeaders(serviceRoleKey),
+      body: JSON.stringify({
+        set_number: setNumber
+      }),
+      cache: "no-store"
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("WORKOUT_SET_RENUMBER_FAILED");
+  }
+};
+
+const renumberSetsDense = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  workoutExerciseId: string
+): Promise<void> => {
+  const rows = await fetchSetOrderRows(supabaseUrl, serviceRoleKey, workoutExerciseId);
+  for (let index = 0; index < rows.length; index += 1) {
+    const expected = index + 1;
+    if (rows[index].set_number === expected) {
+      continue;
+    }
+
+    await updateSetNumber(supabaseUrl, serviceRoleKey, workoutExerciseId, rows[index].id, expected);
+  }
+};
+
 const parseCompleteSetPayload = (payload: unknown): CompleteSetPayload | null => {
   if (!isObject(payload)) {
     return null;
@@ -610,6 +711,44 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         return mutationFailedResponse();
       }
     case "delete_set":
+      try {
+        const workoutExercise = await loadWorkoutExerciseOwnership(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          parsedRequest.payload.workoutExerciseId
+        );
+        if (!workoutExercise) {
+          return notFoundResponse();
+        }
+
+        const isOwner = await verifySessionOwnership(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          workoutExercise.session_id,
+          sessionCheck.payload.sub
+        );
+        if (!isOwner) {
+          return forbiddenResponse();
+        }
+
+        const deleted = await deleteSetById(env.supabaseUrl, env.supabaseServiceRoleKey, parsedRequest.payload);
+        if (!deleted) {
+          return notFoundResponse();
+        }
+
+        await renumberSetsDense(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          parsedRequest.payload.workoutExerciseId
+        );
+
+        return NextResponse.json({
+          ok: true,
+          action: "delete_set"
+        });
+      } catch {
+        return mutationFailedResponse();
+      }
     case "delete_workout_exercises":
       return notImplementedResponse();
     default:

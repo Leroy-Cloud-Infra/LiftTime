@@ -420,12 +420,30 @@ export const addSet = async (params: AddSetParams): Promise<DbWorkoutSet> => {
 };
 
 export const deleteSet = async (params: DeleteSetParams): Promise<void> => {
-  await deleteRows("workout_sets", {
-    id: `eq.${params.setId}`,
-    workout_exercise_id: `eq.${params.workoutExerciseId}`
+  const response = await fetch("/api/workout/mutate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      action: "delete_set",
+      payload: {
+        workoutExerciseId: params.workoutExerciseId,
+        setId: params.setId
+      }
+    })
   });
 
-  await normalizeSetNumbers(params.workoutExerciseId);
+  let parsed: { ok?: boolean; error?: string } | null = null;
+  try {
+    parsed = (await response.json()) as { ok?: boolean; error?: string };
+  } catch {
+    parsed = null;
+  }
+
+  if (!response.ok || parsed?.ok !== true) {
+    throw new Error(parsed?.error ?? "MUTATION_FAILED");
+  }
 };
 
 export const reorderWorkoutExercises = async (params: ReorderWorkoutExercisesParams): Promise<void> => {
