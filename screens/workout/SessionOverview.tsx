@@ -11,6 +11,7 @@ import {
   deleteSet as persistDeleteSet,
   deleteWorkoutExercises as persistDeleteWorkoutExercises,
   reorderWorkoutExercises as persistReorderWorkoutExercises,
+  updateSet as persistUpdateSet,
   type BootstrapWorkoutExerciseInput,
   type DbExerciseCatalog,
   type DbWorkoutExercise,
@@ -852,6 +853,39 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
     });
   };
 
+  const commitSetEdit = (
+    exerciseId: string,
+    setId: string,
+    payload: { reps: number | null; weightLbs: number | null; setType: SetType }
+  ) => {
+    const exercise = session.exercises.find((candidate) => candidate.id === exerciseId);
+    const setRow = exercise?.sets.find((candidate) => candidate.id === setId);
+    if (!setRow?.completed) {
+      return;
+    }
+
+    if (payload.reps === null || payload.reps <= 0) {
+      setPersistenceError("Completed sets must keep reps greater than 0.");
+      return;
+    }
+
+    void (async () => {
+      try {
+        await persistUpdateSet({
+          workoutExerciseId: exerciseId,
+          setId,
+          weightLbs: payload.weightLbs,
+          reps: payload.reps,
+          setType: payload.setType
+        });
+        setPersistenceError(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to save set edit.";
+        setPersistenceError(message);
+      }
+    })();
+  };
+
   const hasMoreExercisesFromTarget = (targetValue: DetailTarget) => {
     const targetIds = targetValue.type === "superset" && targetValue.supersetGroupId
       ? session.supersetGroups.find((group) => group.id === targetValue.supersetGroupId)?.exerciseIds ?? [targetValue.exerciseId]
@@ -1071,6 +1105,7 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
         });
       }}
       onUpdateSet={updateSet}
+      onCommitSetEdit={commitSetEdit}
       onDeleteSet={deleteSet}
       onAddSet={addSet}
       onUpdateExerciseNotes={updateExerciseNotes}

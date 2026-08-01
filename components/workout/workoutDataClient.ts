@@ -118,6 +118,14 @@ export interface DeleteSetParams {
   setId: string;
 }
 
+export interface UpdateSetParams {
+  workoutExerciseId: string;
+  setId: string;
+  weightLbs: number | null;
+  reps: number | null;
+  setType: SetType;
+}
+
 export interface ReorderWorkoutExercisesParams {
   sessionId: string;
   orderedWorkoutExerciseIds: string[];
@@ -430,6 +438,36 @@ export const deleteSet = async (params: DeleteSetParams): Promise<void> => {
       payload: {
         workoutExerciseId: params.workoutExerciseId,
         setId: params.setId
+      }
+    })
+  });
+
+  let parsed: { ok?: boolean; error?: string } | null = null;
+  try {
+    parsed = (await response.json()) as { ok?: boolean; error?: string };
+  } catch {
+    parsed = null;
+  }
+
+  if (!response.ok || parsed?.ok !== true) {
+    throw new Error(parsed?.error ?? "MUTATION_FAILED");
+  }
+};
+
+export const updateSet = async (params: UpdateSetParams): Promise<void> => {
+  const response = await fetch("/api/workout/mutate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      action: "update_set",
+      payload: {
+        workoutExerciseId: params.workoutExerciseId,
+        setId: params.setId,
+        weightLbs: params.weightLbs,
+        reps: params.reps,
+        setType: params.setType
       }
     })
   });

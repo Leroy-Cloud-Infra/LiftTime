@@ -36,6 +36,11 @@ export interface ExerciseDetailProps {
   onFinishWorkout: () => void;
   onSaveSet: (payload: PersistSetPayload) => Promise<void>;
   onUpdateSet: (exerciseId: string, setId: string, patch: Partial<ExerciseSet>) => void;
+  onCommitSetEdit: (
+    exerciseId: string,
+    setId: string,
+    payload: { reps: number | null; weightLbs: number | null; setType: SetType }
+  ) => void;
   onDeleteSet: (exerciseId: string, setId: string) => void;
   onAddSet: (exerciseId: string) => void;
   onUpdateExerciseNotes: (exerciseId: string, notes: string) => void;
@@ -161,6 +166,7 @@ export const ExerciseDetail = ({
   onFinishWorkout,
   onSaveSet,
   onUpdateSet,
+  onCommitSetEdit,
   onDeleteSet,
   onAddSet,
   onUpdateExerciseNotes,
@@ -224,6 +230,7 @@ export const ExerciseDetail = ({
   const allTargetSetsCompleted = allTargetExercises.every((exercise) =>
     exercise.sets.every((set) => set.completed)
   );
+  const nextIncompleteSetId = activeExercise?.sets.find((set) => !set.completed)?.id ?? null;
 
   const hasWeightOverride = activeExercise?.sets.some((set) => set.weightEdited) ?? false;
   const suggestionDirection = useMemo<"up" | "down" | "hold">(() => {
@@ -449,6 +456,9 @@ export const ExerciseDetail = ({
               className="h-20 w-full rounded-[4px] border border-[#2e2e2e] bg-[#141414] p-2 font-data text-[13px] text-[#e8e4dc] focus:border-2 focus:border-[#c8922a] focus:outline-none"
               placeholder="Add notes"
             />
+            <p className="mt-1 font-data text-[11px] text-[#4a4740]">
+              Notes and links are session-local in this build and are not saved after reload.
+            </p>
             <div className="mt-2 flex gap-2">
               <input
                 value={pendingLink}
@@ -593,6 +603,7 @@ export const ExerciseDetail = ({
                 set={setRow}
                 isBodyweight={activeExercise.equipment === "bodyweight"}
                 isBarbell={activeExercise.equipment === "barbell"}
+                isNextIncomplete={setRow.id === nextIncompleteSetId}
                 showSetTypeTags={preferences.showSetTypeTags}
                 preferredUnit={preferences.preferredUnit}
                 onChangeWeight={(weightLbs, edited) => {
@@ -615,6 +626,11 @@ export const ExerciseDetail = ({
                     setCompletionError(null);
                   }
                   onUpdateSet(activeExercise.id, setRow.id, { setType });
+                }}
+                onCommitEdit={(payload) => {
+                  if (setRow.completed) {
+                    onCommitSetEdit(activeExercise.id, setRow.id, payload);
+                  }
                 }}
                 onDelete={() => {
                   setSetDeleteDialog({ setId: setRow.id, setNumber: setRow.setNumber });

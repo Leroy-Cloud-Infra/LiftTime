@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useRef } from "react";
 
 import { SetTypeDropdown } from "@/components/workout/SetTypeDropdown";
 import type { ExerciseSet, PreferredUnit, SetType } from "@/types/workout";
@@ -7,11 +7,13 @@ export interface SetRowProps {
   set: ExerciseSet;
   isBodyweight: boolean;
   isBarbell: boolean;
+  isNextIncomplete: boolean;
   showSetTypeTags: boolean;
   preferredUnit: PreferredUnit;
   onChangeWeight: (weightLbs: number | null, edited: boolean) => void;
   onChangeReps: (reps: number | null) => void;
   onChangeSetType: (setType: SetType) => void;
+  onCommitEdit: (payload: { reps: number | null; weightLbs: number | null; setType: SetType }) => void;
   onDelete: () => void;
 }
 
@@ -98,11 +100,13 @@ export const SetRow = ({
   set,
   isBodyweight: _isBodyweight,
   isBarbell,
+  isNextIncomplete,
   showSetTypeTags,
   preferredUnit,
   onChangeWeight,
   onChangeReps,
   onChangeSetType,
+  onCommitEdit,
   onDelete
 }: SetRowProps) => {
   const weightValue = useMemo(() => formatWeightForInput(set.weightLbs, preferredUnit), [set.weightLbs, preferredUnit]);
@@ -110,55 +114,82 @@ export const SetRow = ({
   const directionSymbol = getDirectionSymbol(set);
   const unitLabel = preferredUnit === "kg" ? "kg" : "lbs";
   const shouldShowDotPicker = !showSetTypeTags;
+  const repsInputRef = useRef<HTMLInputElement>(null);
+  const weightInputRef = useRef<HTMLInputElement>(null);
+  const commitCurrentValues = () => {
+    onCommitEdit({
+      reps: parseIntegerValue(repsInputRef.current?.value ?? repsValue),
+      weightLbs: parseWeightFromInput(weightInputRef.current?.value ?? weightValue, preferredUnit),
+      setType: set.setType
+    });
+  };
+  const rowStateClass = set.completed
+    ? "bg-[#101010]"
+    : isNextIncomplete
+      ? "border-l-2 border-l-[#c8922a] bg-[#1c1c1c]"
+      : "";
+  const inputStateClass = set.completed ? "border-[#4a9e6b] text-[#8a8478]" : "border-[#2e2e2e] text-[#e8e4dc]";
+  const statusSlot = set.completed ? (
+    <span className="inline-flex w-[46px] shrink-0 flex-col items-center justify-center text-[#4a9e6b]">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+        <path d="m5 12 4 4 10-10" />
+      </svg>
+      <span className="mt-[2px] font-display text-[8px] font-bold uppercase leading-none tracking-[0.08em]">Done</span>
+    </span>
+  ) : shouldShowDotPicker ? (
+    <SetTypeDropdown
+      value={set.setType}
+      showTags={false}
+      onChange={onChangeSetType}
+      onDelete={onDelete}
+      triggerClassName="mr-2 shrink-0"
+      triggerContent={
+        <span className="inline-flex w-[38px] items-center justify-start">
+          <span className={`h-[6px] w-[6px] rounded-full ${setTypeDotClassMap[set.setType]}`} aria-hidden="true" />
+          <span
+            className="ml-[6px] inline-flex w-8 items-center justify-center text-center font-display text-[24px] font-bold leading-none text-[#4a4740]"
+            style={{ fontFamily: "Microgramma", fontWeight: 700 }}
+          >
+            {set.setNumber}
+          </span>
+        </span>
+      }
+    />
+  ) : (
+    <span
+      className="mr-2 inline-flex w-8 shrink-0 items-center justify-center text-center font-display text-[24px] font-bold leading-none text-[#4a4740]"
+      style={{ fontFamily: "Microgramma", fontWeight: 700 }}
+    >
+      {set.setNumber}
+    </span>
+  );
 
   return (
-    <div className={`flex min-h-[52px] w-full items-center border-b border-[#2e2e2e] px-3 pt-[10px] ${isBarbell ? "pb-[25px]" : "pb-[10px]"}`}>
-      {shouldShowDotPicker ? (
-        <SetTypeDropdown
-          value={set.setType}
-          showTags={false}
-          onChange={onChangeSetType}
-          onDelete={onDelete}
-          triggerClassName="mr-2 shrink-0"
-          triggerContent={
-            <span className="inline-flex w-[38px] items-center justify-start">
-              <span className={`h-[6px] w-[6px] rounded-full ${setTypeDotClassMap[set.setType]}`} aria-hidden="true" />
-              <span
-                className="ml-[6px] inline-flex w-8 items-center justify-center text-center font-display text-[24px] font-bold leading-none text-[#4a4740]"
-                style={{ fontFamily: "Microgramma", fontWeight: 700 }}
-              >
-                {set.setNumber}
-              </span>
-            </span>
-          }
-        />
-      ) : (
-        <span
-          className="mr-2 inline-flex w-8 shrink-0 items-center justify-center text-center font-display text-[24px] font-bold leading-none text-[#4a4740]"
-          style={{ fontFamily: "Microgramma", fontWeight: 700 }}
-        >
-          {set.setNumber}
-        </span>
-      )}
+    <div className={`flex min-h-[52px] w-full items-center border-b border-[#2e2e2e] px-3 pt-[10px] ${isBarbell ? "pb-[25px]" : "pb-[10px]"} ${rowStateClass}`}>
+      {statusSlot}
 
       <div className="flex min-w-0 flex-1 items-center">
         <input
+          ref={repsInputRef}
           inputMode="numeric"
           value={repsValue}
           onChange={(event) => onChangeReps(parseIntegerValue(event.target.value))}
-          readOnly={set.completed}
-          className="h-10 w-16 shrink-0 rounded-[4px] border border-[#2e2e2e] bg-[#1c1c1c] px-1 text-center font-display text-[20px] font-medium text-[#e8e4dc] focus:border-2 focus:border-[#c8922a] focus:outline-none"
+          onBlur={commitCurrentValues}
+          aria-label={`Set ${set.setNumber} reps${set.completed ? ", completed" : ""}`}
+          className={`h-10 w-16 shrink-0 rounded-[4px] border bg-[#1c1c1c] px-1 text-center font-display text-[20px] font-medium focus:border-2 focus:border-[#c8922a] focus:outline-none ${inputStateClass}`}
           style={{ fontFamily: "Microgramma", fontWeight: 500 }}
         />
         <span className="mx-2 font-data text-[12px] text-[#4a4740]">reps</span>
 
         <div className="relative shrink-0">
           <input
+            ref={weightInputRef}
             inputMode="decimal"
             value={weightValue}
             onChange={(event) => onChangeWeight(parseWeightFromInput(event.target.value, preferredUnit), true)}
-            readOnly={set.completed}
-            className="h-10 w-20 rounded-[4px] border border-[#2e2e2e] bg-[#1c1c1c] px-1 text-center font-display text-[20px] font-medium text-[#e8e4dc] focus:border-2 focus:border-[#c8922a] focus:outline-none"
+            onBlur={commitCurrentValues}
+            aria-label={`Set ${set.setNumber} weight${set.completed ? ", completed" : ""}`}
+            className={`h-10 w-20 rounded-[4px] border bg-[#1c1c1c] px-1 text-center font-display text-[20px] font-medium focus:border-2 focus:border-[#c8922a] focus:outline-none ${inputStateClass}`}
             style={{ fontFamily: "Microgramma", fontWeight: 500 }}
           />
           {isBarbell ? (
