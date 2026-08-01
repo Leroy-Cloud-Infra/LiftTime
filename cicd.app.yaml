@@ -4,7 +4,7 @@ kind: cicd.app
 app:
   name: lifttime
   display_name: LiftTime
-  repository: acesarhernandez/LiftTime
+  repository: Leroy-Cloud-Infra/LiftTime
   service: lifttime
   role: frontend
 

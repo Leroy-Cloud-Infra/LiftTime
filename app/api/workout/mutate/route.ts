@@ -5,7 +5,7 @@ import { verifyAppSessionToken } from "@/lib/server/auth/session";
 
 export const runtime = "nodejs";
 
-type MutationAction = "complete_set" | "add_set" | "delete_set" | "delete_workout_exercises";
+type MutationAction = "complete_set" | "add_set" | "update_set" | "delete_set" | "delete_workout_exercises";
 type SetType = "working" | "warmup" | "drop" | "failure";
 
 interface CompleteSetPayload {
@@ -23,6 +23,14 @@ interface AddSetPayload {
   weightLbs: number | null;
   reps: number | null;
   setType?: SetType;
+}
+
+interface UpdateSetPayload {
+  workoutExerciseId: string;
+  setId: string;
+  weightLbs: number | null;
+  reps: number | null;
+  setType: SetType;
 }
 
 interface DeleteSetPayload {
@@ -62,6 +70,11 @@ interface WorkoutSetRow {
   id: string;
 }
 
+interface WorkoutSetStateRow {
+  id: string;
+  completed: boolean;
+}
+
 interface WorkoutSetNumberRow {
   set_number: number;
 }
@@ -90,12 +103,14 @@ interface SupabaseErrorResponse {
 type ParsedMutationRequest =
   | { action: "complete_set"; payload: CompleteSetPayload }
   | { action: "add_set"; payload: AddSetPayload }
+  | { action: "update_set"; payload: UpdateSetPayload }
   | { action: "delete_set"; payload: DeleteSetPayload }
   | { action: "delete_workout_exercises"; payload: DeleteWorkoutExercisesPayload };
 
 const allowedActions: readonly MutationAction[] = [
   "complete_set",
   "add_set",
+  "update_set",
   "delete_set",
   "delete_workout_exercises"
 ] as const;
@@ -278,6 +293,34 @@ const checkWorkoutSetExists = async (
   return Boolean(rows[0]);
 };
 
+const loadWorkoutSetState = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  workoutExerciseId: string,
+  setId: string
+): Promise<WorkoutSetStateRow | null> => {
+  const response = await fetch(
+    buildRestUrl(supabaseUrl, "workout_sets", {
+      select: "id,completed",
+      id: `eq.${setId}`,
+      workout_exercise_id: `eq.${workoutExerciseId}`,
+      limit: "1"
+    }),
+    {
+      method: "GET",
+      headers: createServiceHeaders(serviceRoleKey, false),
+      cache: "no-store"
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("WORKOUT_SET_STATE_LOOKUP_FAILED");
+  }
+
+  const rows = (await response.json()) as WorkoutSetStateRow[];
+  return rows[0] ?? null;
+};
+
 const updateCompletedSet = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -381,6 +424,44 @@ const insertSet = async (
   }
 
   return created;
+};
+
+const updateSetValues = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  payload: UpdateSetPayload
+): Promise<boolean> => {
+  const response = await fetch(
+    buildRestUrl(supabaseUrl, "workout_sets", {
+      id: `eq.${payload.setId}`,
+      workout_exercise_id: `eq.${payload.workoutExerciseId}`
+    }),
+    {
+      method: "PATCH",
+      headers: {
+        ...createServiceHeaders(serviceRoleKey),
+        Prefer: "return=representation"
+      },
+      body: JSON.stringify({
+        weight_lbs: payload.weightLbs,
+        reps: payload.reps,
+        set_type: payload.setType
+      }),
+      cache: "no-store"
+    }
+  );
+
+  if (!response.ok) {
+    const maybeError = await parseSupabaseError(response);
+    if (response.status === 404 || maybeError?.code === "PGRST116") {
+      return false;
+    }
+
+    throw new Error("WORKOUT_SET_VALUE_UPDATE_FAILED");
+  }
+
+  const rows = (await response.json()) as WorkoutSetRow[];
+  return Boolean(rows[0]);
 };
 
 const deleteSetById = async (
@@ -667,6 +748,40 @@ const parseAddSetPayload = (payload: unknown): AddSetPayload | null => {
   };
 };
 
+const parseUpdateSetPayload = (payload: unknown): UpdateSetPayload | null => {
+  if (!isObject(payload)) {
+    return null;
+  }
+
+  const workoutExerciseId = payload.workoutExerciseId;
+  const setId = payload.setId;
+  const weightLbs = payload.weightLbs;
+  const reps = payload.reps;
+  const setType = payload.setType;
+
+  if (
+    !isNonBlankString(workoutExerciseId) ||
+    !isNonBlankString(setId) ||
+    !isNullableNumber(weightLbs) ||
+    !isNullableNumber(reps) ||
+    !isValidSetType(setType)
+  ) {
+    return null;
+  }
+
+  if (typeof reps === "number" && (!Number.isInteger(reps) || reps < 0)) {
+    return null;
+  }
+
+  return {
+    workoutExerciseId: workoutExerciseId.trim(),
+    setId: setId.trim(),
+    weightLbs,
+    reps,
+    setType
+  };
+};
+
 const parseDeleteSetPayload = (payload: unknown): DeleteSetPayload | null => {
   if (!isObject(payload)) {
     return null;
@@ -723,6 +838,11 @@ const parseMutationRequest = (body: MutationRequestBody): ParsedMutationRequest 
   if (body.action === "add_set") {
     const payload = parseAddSetPayload(body.payload);
     return payload ? { action: "add_set", payload } : null;
+  }
+
+  if (body.action === "update_set") {
+    const payload = parseUpdateSetPayload(body.payload);
+    return payload ? { action: "update_set", payload } : null;
   }
 
   if (body.action === "delete_set") {
@@ -846,6 +966,53 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             set: createdSet
           }
         });
+      } catch {
+        return mutationFailedResponse();
+      }
+    case "update_set":
+      try {
+        const workoutExercise = await loadWorkoutExerciseOwnership(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          parsedRequest.payload.workoutExerciseId
+        );
+        if (!workoutExercise) {
+          return notFoundResponse();
+        }
+
+        const isOwner = await verifySessionOwnership(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          workoutExercise.session_id,
+          sessionCheck.payload.sub
+        );
+        if (!isOwner) {
+          return forbiddenResponse();
+        }
+
+        const setState = await loadWorkoutSetState(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          parsedRequest.payload.workoutExerciseId,
+          parsedRequest.payload.setId
+        );
+        if (!setState) {
+          return notFoundResponse();
+        }
+
+        if (
+          setState.completed &&
+          (typeof parsedRequest.payload.reps !== "number" || parsedRequest.payload.reps <= 0)
+        ) {
+          return invalidInputResponse();
+        }
+
+        const updated = await updateSetValues(env.supabaseUrl, env.supabaseServiceRoleKey, parsedRequest.payload);
+        if (!updated) {
+          return notFoundResponse();
+        }
+
+        return NextResponse.json({ ok: true, action: "update_set" });
       } catch {
         return mutationFailedResponse();
       }
