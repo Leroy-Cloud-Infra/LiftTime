@@ -7,4 +7,16 @@ services:
       - /home/cesar/docker/lifttime/.env
     ports:
       - "7000:3000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.lifttime.rule=Host(`lifttime.leroy`)"
+      - "traefik.http.routers.lifttime.entrypoints=web"
+      - "traefik.http.services.lifttime.loadbalancer.server.port=3000"
+      - "traefik.docker.network=proxy"
+    networks:
+      - proxy
     restart: unless-stopped
+
+networks:
+  proxy:
+    external: true
