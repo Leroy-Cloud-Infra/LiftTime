@@ -2,10 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getAuthEnv } from "@/lib/server/auth/env";
 import { verifyAppSessionToken } from "@/lib/server/auth/session";
+import type {
+  AddedWorkoutExercise,
+  AddedWorkoutSet,
+  ExerciseCatalogSummary
+} from "@/types/exerciseCatalog";
 
 export const runtime = "nodejs";
 
-type MutationAction = "complete_set" | "add_set" | "update_set" | "delete_set" | "delete_workout_exercises";
+type MutationAction =
+  | "complete_set"
+  | "add_set"
+  | "update_set"
+  | "delete_set"
+  | "delete_workout_exercises"
+  | "add_workout_exercise";
 type SetType = "working" | "warmup" | "drop" | "failure";
 
 interface CompleteSetPayload {
@@ -41,6 +52,11 @@ interface DeleteSetPayload {
 interface DeleteWorkoutExercisesPayload {
   sessionId: string;
   workoutExerciseIds: string[];
+}
+
+interface AddWorkoutExercisePayload {
+  sessionId: string;
+  exerciseId: string;
 }
 
 interface MutationRequestBody {
@@ -96,6 +112,43 @@ interface WorkoutSetRecord {
   created_at: string;
 }
 
+interface WorkoutExerciseRpcRow {
+  outcome: "created" | "duplicate" | "session_not_found_or_forbidden" | "session_not_active" | "exercise_not_found_or_inactive";
+  workout_exercise_id: string | null;
+  session_id: string | null;
+  exercise_id: string | null;
+  order_index: number | null;
+  superset_group_id: string | null;
+  created_at: string | null;
+  existing_workout_exercise_id: string | null;
+}
+
+interface WorkoutSetApiRow {
+  id: string;
+  workout_exercise_id: string;
+  set_number: number;
+  set_type: SetType;
+  weight_lbs: number | null;
+  reps: number | null;
+  completed: boolean;
+  completed_at: string | null;
+  created_at: string;
+}
+
+interface ExerciseCatalogApiRow {
+  id: string;
+  name: string;
+  slug: string;
+  muscle_groups: string[];
+  equipment: string[];
+  category: ExerciseCatalogSummary["category"];
+  difficulty: ExerciseCatalogSummary["difficulty"];
+  tracking_type: string;
+  default_sets: number;
+  default_reps: number;
+  is_bodyweight: boolean;
+}
+
 interface SupabaseErrorResponse {
   code?: string;
 }
@@ -105,15 +158,19 @@ type ParsedMutationRequest =
   | { action: "add_set"; payload: AddSetPayload }
   | { action: "update_set"; payload: UpdateSetPayload }
   | { action: "delete_set"; payload: DeleteSetPayload }
-  | { action: "delete_workout_exercises"; payload: DeleteWorkoutExercisesPayload };
+  | { action: "delete_workout_exercises"; payload: DeleteWorkoutExercisesPayload }
+  | { action: "add_workout_exercise"; payload: AddWorkoutExercisePayload };
 
 const allowedActions: readonly MutationAction[] = [
   "complete_set",
   "add_set",
   "update_set",
   "delete_set",
-  "delete_workout_exercises"
+  "delete_workout_exercises",
+  "add_workout_exercise"
 ] as const;
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const isObject = (value: unknown): value is Record<string, unknown> => {
   return typeof value === "object" && value !== null;
@@ -682,6 +739,139 @@ const compactSessionExerciseOrder = async (
   }
 };
 
+const addWorkoutExerciseWithDefaults = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  payload: AddWorkoutExercisePayload,
+  principalId: string
+): Promise<WorkoutExerciseRpcRow> => {
+  const response = await fetch(buildRestUrl(supabaseUrl, "rpc/add_workout_exercise_with_defaults"), {
+    method: "POST",
+    headers: {
+      ...createServiceHeaders(serviceRoleKey),
+      Prefer: "return=representation"
+    },
+    body: JSON.stringify({
+      p_session_id: payload.sessionId,
+      p_exercise_id: payload.exerciseId,
+      p_user_id: principalId
+    }),
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    throw new Error("WORKOUT_EXERCISE_ADD_RPC_FAILED");
+  }
+
+  const rows = (await response.json()) as WorkoutExerciseRpcRow[];
+  const result = rows[0];
+  if (!result) {
+    throw new Error("WORKOUT_EXERCISE_ADD_RPC_EMPTY");
+  }
+
+  return result;
+};
+
+const fetchAddedWorkoutSets = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  workoutExerciseId: string
+): Promise<AddedWorkoutSet[]> => {
+  const response = await fetch(
+    buildRestUrl(supabaseUrl, "workout_sets", {
+      select: "id,workout_exercise_id,set_number,set_type,weight_lbs,reps,completed,completed_at,created_at",
+      workout_exercise_id: `eq.${workoutExerciseId}`,
+      order: "set_number.asc"
+    }),
+    {
+      method: "GET",
+      headers: createServiceHeaders(serviceRoleKey, false),
+      cache: "no-store"
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("ADDED_WORKOUT_SET_FETCH_FAILED");
+  }
+
+  return ((await response.json()) as WorkoutSetApiRow[]).map((row) => ({
+    id: row.id,
+    workoutExerciseId: row.workout_exercise_id,
+    setNumber: row.set_number,
+    setType: row.set_type,
+    weightLbs: row.weight_lbs,
+    reps: row.reps,
+    completed: row.completed,
+    completedAt: row.completed_at,
+    createdAt: row.created_at
+  }));
+};
+
+const fetchExerciseCatalogSummary = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  exerciseId: string
+): Promise<ExerciseCatalogSummary> => {
+  const response = await fetch(
+    buildRestUrl(supabaseUrl, "exercises", {
+      select:
+        "id,name,slug,muscle_groups,equipment,category,difficulty,tracking_type,default_sets,default_reps,is_bodyweight",
+      id: `eq.${exerciseId}`,
+      is_active: "eq.true",
+      limit: "1"
+    }),
+    {
+      method: "GET",
+      headers: createServiceHeaders(serviceRoleKey, false),
+      cache: "no-store"
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("ADDED_EXERCISE_CATALOG_FETCH_FAILED");
+  }
+
+  const row = ((await response.json()) as ExerciseCatalogApiRow[])[0];
+  if (!row) {
+    throw new Error("ADDED_EXERCISE_CATALOG_MISSING");
+  }
+
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    muscleGroups: row.muscle_groups,
+    equipment: row.equipment,
+    category: row.category,
+    difficulty: row.difficulty,
+    trackingType: row.tracking_type,
+    defaultSets: row.default_sets,
+    defaultReps: row.default_reps,
+    isBodyweight: row.is_bodyweight
+  };
+};
+
+const toAddedWorkoutExercise = (row: WorkoutExerciseRpcRow): AddedWorkoutExercise | null => {
+  if (
+    !row.workout_exercise_id ||
+    !row.session_id ||
+    !row.exercise_id ||
+    row.order_index === null ||
+    !row.created_at
+  ) {
+    return null;
+  }
+
+  return {
+    id: row.workout_exercise_id,
+    sessionId: row.session_id,
+    exerciseId: row.exercise_id,
+    orderIndex: row.order_index,
+    supersetGroupId: row.superset_group_id,
+    createdAt: row.created_at
+  };
+};
+
 const parseCompleteSetPayload = (payload: unknown): CompleteSetPayload | null => {
   if (!isObject(payload)) {
     return null;
@@ -825,6 +1015,28 @@ const parseDeleteWorkoutExercisesPayload = (payload: unknown): DeleteWorkoutExer
   };
 };
 
+const parseAddWorkoutExercisePayload = (payload: unknown): AddWorkoutExercisePayload | null => {
+  if (!isObject(payload)) {
+    return null;
+  }
+
+  const sessionId = payload.sessionId;
+  const exerciseId = payload.exerciseId;
+  if (
+    !isNonBlankString(sessionId) ||
+    !isNonBlankString(exerciseId) ||
+    !UUID_PATTERN.test(sessionId) ||
+    !UUID_PATTERN.test(exerciseId)
+  ) {
+    return null;
+  }
+
+  return {
+    sessionId: sessionId.trim(),
+    exerciseId: exerciseId.trim()
+  };
+};
+
 const parseMutationRequest = (body: MutationRequestBody): ParsedMutationRequest | null => {
   if (!allowedActions.includes(body.action as MutationAction)) {
     return null;
@@ -853,6 +1065,11 @@ const parseMutationRequest = (body: MutationRequestBody): ParsedMutationRequest 
   if (body.action === "delete_workout_exercises") {
     const payload = parseDeleteWorkoutExercisesPayload(body.payload);
     return payload ? { action: "delete_workout_exercises", payload } : null;
+  }
+
+  if (body.action === "add_workout_exercise") {
+    const payload = parseAddWorkoutExercisePayload(body.payload);
+    return payload ? { action: "add_workout_exercise", payload } : null;
   }
 
   return null;
@@ -1088,6 +1305,66 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           action: "delete_workout_exercises",
           data: {
             deletedWorkoutExerciseIds: deletableIds
+          }
+        });
+      } catch {
+        return mutationFailedResponse();
+      }
+    case "add_workout_exercise":
+      try {
+        const result = await addWorkoutExerciseWithDefaults(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          parsedRequest.payload,
+          sessionCheck.payload.sub
+        );
+
+        if (result.outcome === "session_not_found_or_forbidden") {
+          return forbiddenResponse();
+        }
+
+        if (result.outcome === "session_not_active") {
+          return NextResponse.json({ ok: false, error: "SESSION_NOT_ACTIVE" }, { status: 409 });
+        }
+
+        if (result.outcome === "exercise_not_found_or_inactive") {
+          return NextResponse.json({ ok: false, error: "EXERCISE_UNAVAILABLE" }, { status: 404 });
+        }
+
+        if (result.outcome === "duplicate" && result.existing_workout_exercise_id) {
+          return NextResponse.json(
+            {
+              ok: false,
+              error: "EXERCISE_ALREADY_IN_SESSION",
+              data: {
+                workoutExerciseId: result.existing_workout_exercise_id
+              }
+            },
+            { status: 409 }
+          );
+        }
+
+        if (result.outcome !== "created") {
+          return mutationFailedResponse();
+        }
+
+        const workoutExercise = toAddedWorkoutExercise(result);
+        if (!workoutExercise) {
+          return mutationFailedResponse();
+        }
+
+        const [sets, exercise] = await Promise.all([
+          fetchAddedWorkoutSets(env.supabaseUrl, env.supabaseServiceRoleKey, workoutExercise.id),
+          fetchExerciseCatalogSummary(env.supabaseUrl, env.supabaseServiceRoleKey, workoutExercise.exerciseId)
+        ]);
+
+        return NextResponse.json({
+          ok: true,
+          action: "add_workout_exercise",
+          data: {
+            workoutExercise,
+            sets,
+            exercise
           }
         });
       } catch {
