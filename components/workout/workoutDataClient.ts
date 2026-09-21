@@ -136,6 +136,22 @@ export interface DeleteWorkoutExercisesParams {
   workoutExerciseIds: string[];
 }
 
+export interface FinishWorkoutSessionParams {
+  sessionId: string;
+}
+
+export interface FinishedWorkoutSessionSummary {
+  session: {
+    id: string;
+    status: "completed" | "incomplete";
+    startedAt: string;
+    endedAt: string;
+  };
+  exerciseCount: number;
+  completedSetCount: number;
+  totalSetCount: number;
+}
+
 const buildInFilter = (values: string[]): string | undefined => {
   if (values.length === 0) {
     return undefined;
@@ -541,4 +557,44 @@ export const deleteWorkoutExercises = async (params: DeleteWorkoutExercisesParam
   if (!response.ok || parsed?.ok !== true) {
     throw new Error(parsed?.error ?? "MUTATION_FAILED");
   }
+};
+
+export const finishWorkoutSession = async (
+  params: FinishWorkoutSessionParams
+): Promise<FinishedWorkoutSessionSummary> => {
+  const response = await fetch("/api/workout/mutate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      action: "finish_workout_session",
+      payload: {
+        sessionId: params.sessionId
+      }
+    })
+  });
+
+  let parsed:
+    | {
+        ok?: boolean;
+        error?: string;
+        data?: FinishedWorkoutSessionSummary;
+      }
+    | null = null;
+  try {
+    parsed = (await response.json()) as {
+      ok?: boolean;
+      error?: string;
+      data?: FinishedWorkoutSessionSummary;
+    };
+  } catch {
+    parsed = null;
+  }
+
+  if (!response.ok || parsed?.ok !== true || !parsed.data) {
+    throw new Error(parsed?.error ?? "MUTATION_FAILED");
+  }
+
+  return parsed.data;
 };
