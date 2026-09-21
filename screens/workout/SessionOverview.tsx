@@ -11,12 +11,14 @@ import {
   completeSet as persistCompleteSet,
   deleteSet as persistDeleteSet,
   deleteWorkoutExercises as persistDeleteWorkoutExercises,
+  finishWorkoutSession as persistFinishWorkoutSession,
   reorderWorkoutExercises as persistReorderWorkoutExercises,
   updateSet as persistUpdateSet,
   type BootstrapWorkoutExerciseInput,
   type DbExerciseCatalog,
   type DbWorkoutExercise,
   type DbWorkoutSet,
+  type FinishedWorkoutSessionSummary,
   type LoadOrCreateSessionResult
 } from "@/components/workout/workoutDataClient";
 import { ExerciseDetail, type PersistSetPayload } from "@/screens/workout/ExerciseDetail";
@@ -526,6 +528,27 @@ const getMusclePriorityScore = (muscleGroup: string) => {
   return 0;
 };
 
+const formatSessionDuration = (startedAt: string, endedAt: string): string => {
+  const elapsedSeconds = Math.max(0, Math.round((Date.parse(endedAt) - Date.parse(startedAt)) / 1000));
+  const hours = Math.floor(elapsedSeconds / 3600);
+  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  return `${minutes}m`;
+};
+
+const formatSessionTimeRange = (startedAt: string, endedAt: string): string => {
+  const formatter = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit"
+  });
+
+  return `${formatter.format(new Date(startedAt))} - ${formatter.format(new Date(endedAt))}`;
+};
+
 interface SessionOverviewProps {
   authenticatedUserId: string;
 }
@@ -540,6 +563,9 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
   const [isDesktop, setIsDesktop] = useState(false);
   const [showFinishConfirm, setShowFinishConfirm] = useState(false);
   const [stubScreen, setStubScreen] = useState<"exercise-browser" | "session-summary" | null>(null);
+  const [finishedSessionSummary, setFinishedSessionSummary] = useState<FinishedWorkoutSessionSummary | null>(null);
+  const [isFinishingSession, setIsFinishingSession] = useState(false);
+  const [finishSessionError, setFinishSessionError] = useState<string | null>(null);
   const [activeCatalogExerciseIds, setActiveCatalogExerciseIds] = useState<ReadonlySet<string>>(() => new Set());
   const [isEditMode, setIsEditMode] = useState(false);
   const [selectedExerciseIds, setSelectedExerciseIds] = useState<string[]>([]);
@@ -888,6 +914,29 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
     );
   };
 
+  const finishWorkoutSession = async (): Promise<void> => {
+    if (isFinishingSession) {
+      return;
+    }
+
+    setIsFinishingSession(true);
+    setFinishSessionError(null);
+
+    try {
+      const summary = await persistFinishWorkoutSession({ sessionId: session.id });
+      setFinishedSessionSummary(summary);
+      setShowFinishConfirm(false);
+      setDetailTarget(null);
+      setStubScreen("session-summary");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to finish this workout.";
+      setFinishSessionError(message);
+      throw error;
+    } finally {
+      setIsFinishingSession(false);
+    }
+  };
+
   const inProgressRows = useMemo(() => {
     return buildGroupedRows(inProgressExercises);
   }, [inProgressExercises]);
@@ -1085,10 +1134,8 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
       isDesktop={isDesktop}
       onClose={() => setDetailTarget(null)}
       onAdvanceExercise={() => undefined}
-      onFinishWorkout={() => {
-        setDetailTarget(null);
-        setStubScreen("session-summary");
-      }}
+      onFinishWorkout={finishWorkoutSession}
+      isFinishingWorkout={isFinishingSession}
       onSaveSet={async (payload) => {
         await saveSet(payload);
         updateSet(payload.workoutExerciseId, payload.setId, {
@@ -1442,10 +1489,14 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
         <div className="mx-auto w-full max-w-[420px]">
           <button
             type="button"
-            onClick={() => setShowFinishConfirm(true)}
-            className="h-[60px] w-full border-2 border-[#8a6219] font-display text-[18px] font-bold uppercase tracking-[0.08em] text-[#0d0d0d]"
+            onClick={() => {
+              setFinishSessionError(null);
+              setShowFinishConfirm(true);
+            }}
+            disabled={isFinishingSession || Boolean(finishedSessionSummary)}
+            className="h-[60px] w-full border-2 border-[#8a6219] font-display text-[18px] font-bold uppercase tracking-[0.08em] text-[#0d0d0d] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Finish Session
+            {isFinishingSession ? "Finishing..." : "Finish Session"}
           </button>
         </div>
       </div>
@@ -1502,23 +1553,29 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
             <p className="font-data text-[14px] text-[#8a8478]">
               End this session? All logged sets will be saved.
             </p>
+            {finishSessionError ? (
+              <p className="mt-3 font-data text-[12px] text-[#b84040]" role="alert">
+                {finishSessionError}
+              </p>
+            ) : null}
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setShowFinishConfirm(false)}
-                className="h-8 rounded-[4px] border border-[#2e2e2e] px-3 font-display text-[12px] uppercase tracking-[0.08em] text-[#8a8478]"
+                disabled={isFinishingSession}
+                className="h-8 rounded-[4px] border border-[#2e2e2e] px-3 font-display text-[12px] uppercase tracking-[0.08em] text-[#8a8478] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={() => {
-                  setShowFinishConfirm(false);
-                  setStubScreen("session-summary");
+                  void finishWorkoutSession().catch(() => undefined);
                 }}
-                className="h-8 rounded-[4px] bg-[#b84040] px-3 font-display text-[12px] uppercase tracking-[0.08em] text-white"
+                disabled={isFinishingSession}
+                className="h-8 rounded-[4px] bg-[#b84040] px-3 font-display text-[12px] uppercase tracking-[0.08em] text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
-                End Session
+                {isFinishingSession ? "Finishing..." : "End Session"}
               </button>
             </div>
           </div>
@@ -1554,7 +1611,28 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
             <h2 className="mb-4 font-display text-[18px] uppercase text-[#e8e4dc]">
               Session Summary
             </h2>
-            <p className="mt-2 font-data text-[13px] text-[#8a8478]">Placeholder screen stub.</p>
+            {finishedSessionSummary ? (
+              <div className="space-y-2 font-data text-[13px] text-[#8a8478]">
+                <p className="font-display text-[14px] uppercase text-[#e8e4dc]">
+                  {finishedSessionSummary.session.status === "completed" ? "Complete" : "Incomplete"}
+                </p>
+                <p>
+                  {formatSessionDuration(
+                    finishedSessionSummary.session.startedAt,
+                    finishedSessionSummary.session.endedAt
+                  )} {"-"} {formatSessionTimeRange(
+                    finishedSessionSummary.session.startedAt,
+                    finishedSessionSummary.session.endedAt
+                  )}
+                </p>
+                <p>{finishedSessionSummary.exerciseCount} exercises</p>
+                <p>
+                  {finishedSessionSummary.completedSetCount}/{finishedSessionSummary.totalSetCount} sets logged
+                </p>
+              </div>
+            ) : (
+              <p className="mt-2 font-data text-[13px] text-[#8a8478]">No finished session summary is available.</p>
+            )}
           </div>
         </div>
       ) : null}

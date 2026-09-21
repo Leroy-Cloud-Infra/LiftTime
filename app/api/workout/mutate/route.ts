@@ -16,7 +16,8 @@ type MutationAction =
   | "update_set"
   | "delete_set"
   | "delete_workout_exercises"
-  | "add_workout_exercise";
+  | "add_workout_exercise"
+  | "finish_workout_session";
 type SetType = "working" | "warmup" | "drop" | "failure";
 
 interface CompleteSetPayload {
@@ -59,6 +60,10 @@ interface AddWorkoutExercisePayload {
   exerciseId: string;
 }
 
+interface FinishWorkoutSessionPayload {
+  sessionId: string;
+}
+
 interface MutationRequestBody {
   action?: unknown;
   payload?: unknown;
@@ -71,6 +76,13 @@ interface WorkoutExerciseOwnerRow {
 
 interface WorkoutSessionOwnerRow {
   id: string;
+}
+
+interface WorkoutSessionRow {
+  id: string;
+  status: "active" | "completed" | "incomplete";
+  started_at: string;
+  ended_at: string | null;
 }
 
 interface WorkoutExerciseRow {
@@ -159,7 +171,8 @@ type ParsedMutationRequest =
   | { action: "update_set"; payload: UpdateSetPayload }
   | { action: "delete_set"; payload: DeleteSetPayload }
   | { action: "delete_workout_exercises"; payload: DeleteWorkoutExercisesPayload }
-  | { action: "add_workout_exercise"; payload: AddWorkoutExercisePayload };
+  | { action: "add_workout_exercise"; payload: AddWorkoutExercisePayload }
+  | { action: "finish_workout_session"; payload: FinishWorkoutSessionPayload };
 
 const allowedActions: readonly MutationAction[] = [
   "complete_set",
@@ -167,7 +180,8 @@ const allowedActions: readonly MutationAction[] = [
   "update_set",
   "delete_set",
   "delete_workout_exercises",
-  "add_workout_exercise"
+  "add_workout_exercise",
+  "finish_workout_session"
 ] as const;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -320,6 +334,127 @@ const verifySessionOwnership = async (
 
   const rows = (await response.json()) as WorkoutSessionOwnerRow[];
   return Boolean(rows[0]);
+};
+
+const verifyActiveSessionOwnership = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  sessionId: string,
+  principalId: string
+): Promise<boolean> => {
+  const response = await fetch(
+    buildRestUrl(supabaseUrl, "workout_sessions", {
+      select: "id",
+      id: `eq.${sessionId}`,
+      user_id: `eq.${principalId}`,
+      status: "eq.active",
+      limit: "1"
+    }),
+    {
+      method: "GET",
+      headers: createServiceHeaders(serviceRoleKey, false),
+      cache: "no-store"
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("ACTIVE_WORKOUT_SESSION_LOOKUP_FAILED");
+  }
+
+  const rows = (await response.json()) as WorkoutSessionOwnerRow[];
+  return Boolean(rows[0]);
+};
+
+const fetchWorkoutExerciseIdsForSession = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  sessionId: string
+): Promise<string[]> => {
+  const response = await fetch(
+    buildRestUrl(supabaseUrl, "workout_exercises", {
+      select: "id",
+      session_id: `eq.${sessionId}`
+    }),
+    {
+      method: "GET",
+      headers: createServiceHeaders(serviceRoleKey, false),
+      cache: "no-store"
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("WORKOUT_SESSION_EXERCISE_LOOKUP_FAILED");
+  }
+
+  return ((await response.json()) as WorkoutExerciseRow[]).map((row) => row.id);
+};
+
+const fetchSessionSetStates = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  workoutExerciseIds: string[]
+): Promise<WorkoutSetStateRow[]> => {
+  if (workoutExerciseIds.length === 0) {
+    return [];
+  }
+
+  const response = await fetch(
+    buildRestUrl(supabaseUrl, "workout_sets", {
+      select: "id,completed",
+      workout_exercise_id: buildInFilter(workoutExerciseIds)
+    }),
+    {
+      method: "GET",
+      headers: createServiceHeaders(serviceRoleKey, false),
+      cache: "no-store"
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("WORKOUT_SESSION_SET_LOOKUP_FAILED");
+  }
+
+  return (await response.json()) as WorkoutSetStateRow[];
+};
+
+const finishActiveWorkoutSession = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  sessionId: string,
+  principalId: string,
+  status: "completed" | "incomplete",
+  endedAt: string
+): Promise<WorkoutSessionRow | null> => {
+  const response = await fetch(
+    buildRestUrl(supabaseUrl, "workout_sessions", {
+      id: `eq.${sessionId}`,
+      user_id: `eq.${principalId}`,
+      status: "eq.active"
+    }),
+    {
+      method: "PATCH",
+      headers: {
+        ...createServiceHeaders(serviceRoleKey),
+        Prefer: "return=representation"
+      },
+      body: JSON.stringify({
+        status,
+        ended_at: endedAt
+      }),
+      cache: "no-store"
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("WORKOUT_SESSION_FINISH_FAILED");
+  }
+
+  const rows = (await response.json()) as WorkoutSessionRow[];
+  return rows[0] ?? null;
+};
+
+const sessionNotActiveResponse = () => {
+  return NextResponse.json({ ok: false, error: "SESSION_NOT_ACTIVE" }, { status: 409 });
 };
 
 const checkWorkoutSetExists = async (
@@ -1037,6 +1172,19 @@ const parseAddWorkoutExercisePayload = (payload: unknown): AddWorkoutExercisePay
   };
 };
 
+const parseFinishWorkoutSessionPayload = (payload: unknown): FinishWorkoutSessionPayload | null => {
+  if (!isObject(payload)) {
+    return null;
+  }
+
+  const sessionId = payload.sessionId;
+  if (!isNonBlankString(sessionId) || !UUID_PATTERN.test(sessionId)) {
+    return null;
+  }
+
+  return { sessionId: sessionId.trim() };
+};
+
 const parseMutationRequest = (body: MutationRequestBody): ParsedMutationRequest | null => {
   if (!allowedActions.includes(body.action as MutationAction)) {
     return null;
@@ -1070,6 +1218,11 @@ const parseMutationRequest = (body: MutationRequestBody): ParsedMutationRequest 
   if (body.action === "add_workout_exercise") {
     const payload = parseAddWorkoutExercisePayload(body.payload);
     return payload ? { action: "add_workout_exercise", payload } : null;
+  }
+
+  if (body.action === "finish_workout_session") {
+    const payload = parseFinishWorkoutSessionPayload(body.payload);
+    return payload ? { action: "finish_workout_session", payload } : null;
   }
 
   return null;
@@ -1128,6 +1281,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           return forbiddenResponse();
         }
 
+        const isActive = await verifyActiveSessionOwnership(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          workoutExercise.session_id,
+          sessionCheck.payload.sub
+        );
+        if (!isActive) {
+          return sessionNotActiveResponse();
+        }
+
         const hasSet = await checkWorkoutSetExists(
           env.supabaseUrl,
           env.supabaseServiceRoleKey,
@@ -1169,6 +1332,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           return forbiddenResponse();
         }
 
+        const isActive = await verifyActiveSessionOwnership(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          workoutExercise.session_id,
+          sessionCheck.payload.sub
+        );
+        if (!isActive) {
+          return sessionNotActiveResponse();
+        }
+
         const highestSetNumber = await fetchHighestSetNumber(
           env.supabaseUrl,
           env.supabaseServiceRoleKey,
@@ -1205,6 +1378,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         );
         if (!isOwner) {
           return forbiddenResponse();
+        }
+
+        const isActive = await verifyActiveSessionOwnership(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          workoutExercise.session_id,
+          sessionCheck.payload.sub
+        );
+        if (!isActive) {
+          return sessionNotActiveResponse();
         }
 
         const setState = await loadWorkoutSetState(
@@ -1254,6 +1437,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           return forbiddenResponse();
         }
 
+        const isActive = await verifyActiveSessionOwnership(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          workoutExercise.session_id,
+          sessionCheck.payload.sub
+        );
+        if (!isActive) {
+          return sessionNotActiveResponse();
+        }
+
         const deleted = await deleteSetById(env.supabaseUrl, env.supabaseServiceRoleKey, parsedRequest.payload);
         if (!deleted) {
           return notFoundResponse();
@@ -1284,6 +1477,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           return forbiddenResponse();
         }
 
+        const isActive = await verifyActiveSessionOwnership(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          parsedRequest.payload.sessionId,
+          sessionCheck.payload.sub
+        );
+        if (!isActive) {
+          return sessionNotActiveResponse();
+        }
+
         const deletableIds = await fetchSessionWorkoutExerciseIds(
           env.supabaseUrl,
           env.supabaseServiceRoleKey,
@@ -1305,6 +1508,76 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           action: "delete_workout_exercises",
           data: {
             deletedWorkoutExerciseIds: deletableIds
+          }
+        });
+      } catch {
+        return mutationFailedResponse();
+      }
+    case "finish_workout_session":
+      try {
+        const isOwner = await verifySessionOwnership(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          parsedRequest.payload.sessionId,
+          sessionCheck.payload.sub
+        );
+        if (!isOwner) {
+          return forbiddenResponse();
+        }
+
+        const isActive = await verifyActiveSessionOwnership(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          parsedRequest.payload.sessionId,
+          sessionCheck.payload.sub
+        );
+        if (!isActive) {
+          return sessionNotActiveResponse();
+        }
+
+        const workoutExerciseIds = await fetchWorkoutExerciseIdsForSession(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          parsedRequest.payload.sessionId
+        );
+        const setStates = await fetchSessionSetStates(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          workoutExerciseIds
+        );
+        const completedSetCount = setStates.filter((set) => set.completed).length;
+        const totalSetCount = setStates.length;
+        // A session without logged sets is intentionally partial rather than complete.
+        const status = totalSetCount > 0 && completedSetCount === totalSetCount ? "completed" : "incomplete";
+        const finished = await finishActiveWorkoutSession(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          parsedRequest.payload.sessionId,
+          sessionCheck.payload.sub,
+          status,
+          new Date().toISOString()
+        );
+        if (!finished) {
+          return sessionNotActiveResponse();
+        }
+
+        if (!finished.ended_at) {
+          return mutationFailedResponse();
+        }
+
+        return NextResponse.json({
+          ok: true,
+          action: "finish_workout_session",
+          data: {
+            session: {
+              id: finished.id,
+              status,
+              startedAt: finished.started_at,
+              endedAt: finished.ended_at
+            },
+            exerciseCount: workoutExerciseIds.length,
+            completedSetCount,
+            totalSetCount
           }
         });
       } catch {

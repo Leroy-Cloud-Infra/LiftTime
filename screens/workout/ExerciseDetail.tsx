@@ -31,9 +31,10 @@ export interface ExerciseDetailProps {
   target: DetailTarget;
   hasMoreExercisesRemaining: boolean;
   isDesktop: boolean;
+  isFinishingWorkout: boolean;
   onClose: () => void;
   onAdvanceExercise: () => void;
-  onFinishWorkout: () => void;
+  onFinishWorkout: () => Promise<void>;
   onSaveSet: (payload: PersistSetPayload) => Promise<void>;
   onUpdateSet: (exerciseId: string, setId: string, patch: Partial<ExerciseSet>) => void;
   onCommitSetEdit: (
@@ -161,6 +162,7 @@ export const ExerciseDetail = ({
   target,
   hasMoreExercisesRemaining,
   isDesktop,
+  isFinishingWorkout,
   onClose,
   onAdvanceExercise,
   onFinishWorkout,
@@ -346,7 +348,12 @@ export const ExerciseDetail = ({
       return;
     }
 
-    onFinishWorkout();
+    try {
+      await onFinishWorkout();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to finish this workout.";
+      setCompletionError(message);
+    }
   };
 
   if (!activeExercise) {
@@ -707,13 +714,14 @@ export const ExerciseDetail = ({
           onClick={() => {
             void onPrimaryAction();
           }}
-          className={`h-[56px] w-full rounded-[4px] border-2 font-display text-[18px] font-bold uppercase tracking-[0.08em] ${
+          disabled={isFinishingWorkout}
+          className={`h-[56px] w-full rounded-[4px] border-2 font-display text-[18px] font-bold uppercase tracking-[0.08em] disabled:cursor-not-allowed disabled:opacity-60 ${
             primaryActionLabel === "FINISH WORKOUT"
               ? "border-[#4a9e6b] bg-[#4a9e6b] text-white"
               : "border-[#8a6219] bg-[#c8922a] text-[#0d0d0d]"
           }`}
         >
-          {primaryActionLabel}
+          {isFinishingWorkout && primaryActionLabel === "FINISH WORKOUT" ? "FINISHING..." : primaryActionLabel}
         </button>
       </div>
     </div>
