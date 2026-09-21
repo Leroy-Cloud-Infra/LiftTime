@@ -307,7 +307,7 @@ export const SetRow = ({
                   className={`h-9 border font-data text-[14px] ${
                     isSelected
                       ? "border-[#c8922a] bg-[#2a1f0a] text-[#c8922a]"
-                      : "border-[#2e2e2e] bg-[#1c1c1c] text-[#8a8478] hover:border-[#c8922a] hover:text-[#c8922a]"
+                      : "border-[#2e2e2e] bg-[#1c1c1c] text-[#8a8478] focus-visible:border-[#c8922a] focus-visible:text-[#c8922a]"
                   } disabled:cursor-not-allowed disabled:opacity-60`}
                 >
                   {rir}

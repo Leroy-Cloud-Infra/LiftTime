@@ -293,6 +293,7 @@ export const updateSet = async (params: UpdateSetParams): Promise<void> => {
         setId: params.setId,
         weightLbs: params.weightLbs,
         reps: params.reps,
+        rir: params.rir,
         setType: params.setType
       }
     })
