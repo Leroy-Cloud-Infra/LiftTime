@@ -59,6 +59,7 @@ export interface AddedWorkoutSet {
   setType: SetType;
   weightLbs: number | null;
   reps: number | null;
+  rir: number | null;
   completed: boolean;
   completedAt: string | null;
   createdAt: string;

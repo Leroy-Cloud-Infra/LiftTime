@@ -28,6 +28,7 @@ interface CompleteSetPayload {
   setType: SetType;
   weightLbs: number | null;
   reps: number | null;
+  rir: number | null;
   completedAt: string;
 }
 
@@ -43,6 +44,7 @@ interface UpdateSetPayload {
   setId: string;
   weightLbs: number | null;
   reps: number | null;
+  rir: number | null;
   setType: SetType;
 }
 
@@ -122,6 +124,7 @@ interface WorkoutSetRecord {
   set_type: SetType;
   weight_lbs: number | null;
   reps: number | null;
+  rir: number | null;
   completed: boolean;
   completed_at: string | null;
   created_at: string;
@@ -150,6 +153,7 @@ interface WorkoutSetApiRow {
   set_type: SetType;
   weight_lbs: number | null;
   reps: number | null;
+  rir: number | null;
   completed: boolean;
   completed_at: string | null;
   created_at: string;
@@ -210,6 +214,10 @@ const isNullableNumber = (value: unknown): value is number | null => {
 
 const isValidSetType = (value: unknown): value is SetType => {
   return value === "working" || value === "warmup" || value === "drop" || value === "failure";
+};
+
+const isValidRir = (value: unknown): value is number | null => {
+  return value === null || (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 5);
 };
 
 const invalidInputResponse = () => {
@@ -544,6 +552,7 @@ const updateCompletedSet = async (
         set_type: payload.setType,
         weight_lbs: payload.weightLbs,
         reps: payload.reps,
+        rir: payload.rir,
         completed: true,
         completed_at: payload.completedAt
       }),
@@ -647,6 +656,7 @@ const updateSetValues = async (
       body: JSON.stringify({
         weight_lbs: payload.weightLbs,
         reps: payload.reps,
+        rir: payload.rir,
         set_type: payload.setType
       }),
       cache: "no-store"
@@ -952,7 +962,7 @@ const fetchAddedWorkoutSets = async (
 ): Promise<AddedWorkoutSet[]> => {
   const response = await fetch(
     buildRestUrl(supabaseUrl, "workout_sets", {
-      select: "id,workout_exercise_id,set_number,set_type,weight_lbs,reps,completed,completed_at,created_at",
+      select: "id,workout_exercise_id,set_number,set_type,weight_lbs,reps,rir,completed,completed_at,created_at",
       workout_exercise_id: `eq.${workoutExerciseId}`,
       order: "set_number.asc"
     }),
@@ -974,6 +984,7 @@ const fetchAddedWorkoutSets = async (
     setType: row.set_type,
     weightLbs: row.weight_lbs,
     reps: row.reps,
+    rir: row.rir,
     completed: row.completed,
     completedAt: row.completed_at,
     createdAt: row.created_at
@@ -1056,6 +1067,7 @@ const parseCompleteSetPayload = (payload: unknown): CompleteSetPayload | null =>
   const setType = payload.setType;
   const weightLbs = payload.weightLbs;
   const reps = payload.reps;
+  const rir = payload.rir;
   const completedAt = payload.completedAt;
 
   if (
@@ -1066,6 +1078,7 @@ const parseCompleteSetPayload = (payload: unknown): CompleteSetPayload | null =>
     setNumber <= 0 ||
     !isValidSetType(setType) ||
     !isNullableNumber(weightLbs) ||
+    !isValidRir(rir) ||
     typeof reps !== "number" ||
     !Number.isInteger(reps) ||
     reps <= 0 || // product lock: completed set requires reps > 0
@@ -1081,6 +1094,7 @@ const parseCompleteSetPayload = (payload: unknown): CompleteSetPayload | null =>
     setType,
     weightLbs,
     reps,
+    rir,
     completedAt: completedAt.trim()
   };
 };
@@ -1120,6 +1134,7 @@ const parseUpdateSetPayload = (payload: unknown): UpdateSetPayload | null => {
   const setId = payload.setId;
   const weightLbs = payload.weightLbs;
   const reps = payload.reps;
+  const rir = payload.rir;
   const setType = payload.setType;
 
   if (
@@ -1127,6 +1142,7 @@ const parseUpdateSetPayload = (payload: unknown): UpdateSetPayload | null => {
     !isNonBlankString(setId) ||
     !isNullableNumber(weightLbs) ||
     !isNullableNumber(reps) ||
+    !isValidRir(rir) ||
     !isValidSetType(setType)
   ) {
     return null;
@@ -1141,6 +1157,7 @@ const parseUpdateSetPayload = (payload: unknown): UpdateSetPayload | null => {
     setId: setId.trim(),
     weightLbs,
     reps,
+    rir,
     setType
   };
 };

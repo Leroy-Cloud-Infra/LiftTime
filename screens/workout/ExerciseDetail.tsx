@@ -21,6 +21,7 @@ export interface PersistSetPayload {
   setType: SetType;
   weightLbs: number | null;
   reps: number | null;
+  rir: number | null;
   completed: true;
   completedAt: string;
 }
@@ -40,8 +41,8 @@ export interface ExerciseDetailProps {
   onCommitSetEdit: (
     exerciseId: string,
     setId: string,
-    payload: { reps: number | null; weightLbs: number | null; setType: SetType }
-  ) => void;
+    payload: { reps: number | null; weightLbs: number | null; setType: SetType; rir: number | null }
+  ) => Promise<void>;
   onDeleteSet: (exerciseId: string, setId: string) => void;
   onAddSet: (exerciseId: string) => void;
   onUpdateExerciseNotes: (exerciseId: string, notes: string) => void;
@@ -299,6 +300,7 @@ export const ExerciseDetail = ({
         setType: pendingSet.setType,
         weightLbs: pendingSet.weightLbs,
         reps: pendingSet.reps,
+        rir: pendingSet.rir,
         completed: true,
         completedAt
       });
@@ -308,6 +310,7 @@ export const ExerciseDetail = ({
     }
 
     onUpdateSet(activeExercise.id, pendingSet.id, {
+      rir: pendingSet.rir,
       completed: true,
       completedAt
     });
@@ -634,9 +637,15 @@ export const ExerciseDetail = ({
                   }
                   onUpdateSet(activeExercise.id, setRow.id, { setType });
                 }}
-                onCommitEdit={(payload) => {
+                onChangeRir={(rir) => {
+                  if (completionError) {
+                    setCompletionError(null);
+                  }
+                  onUpdateSet(activeExercise.id, setRow.id, { rir });
+                }}
+                onCommitEdit={async (payload) => {
                   if (setRow.completed) {
-                    onCommitSetEdit(activeExercise.id, setRow.id, payload);
+                    await onCommitSetEdit(activeExercise.id, setRow.id, payload);
                   }
                 }}
                 onDelete={() => {

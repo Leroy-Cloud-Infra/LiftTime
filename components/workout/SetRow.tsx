@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from "react";
+import React, { useMemo, useRef, useState } from "react";
 
 import { SetTypeDropdown } from "@/components/workout/SetTypeDropdown";
 import type { ExerciseSet, PreferredUnit, SetType } from "@/types/workout";
@@ -13,7 +13,8 @@ export interface SetRowProps {
   onChangeWeight: (weightLbs: number | null, edited: boolean) => void;
   onChangeReps: (reps: number | null) => void;
   onChangeSetType: (setType: SetType) => void;
-  onCommitEdit: (payload: { reps: number | null; weightLbs: number | null; setType: SetType }) => void;
+  onChangeRir: (rir: number | null) => void;
+  onCommitEdit: (payload: { reps: number | null; weightLbs: number | null; setType: SetType; rir: number | null }) => Promise<void>;
   onDelete: () => void;
 }
 
@@ -31,6 +32,8 @@ const setTypeDotClassMap: Record<SetType, string> = {
   drop: "bg-[#8a8478]",
   failure: "bg-[#b84040]"
 };
+
+const RIR_OPTIONS = [0, 1, 2, 3, 4, 5] as const;
 
 const formatWeightForInput = (weightLbs: number | null, unit: PreferredUnit) => {
   if (weightLbs === null) {
@@ -106,6 +109,7 @@ export const SetRow = ({
   onChangeWeight,
   onChangeReps,
   onChangeSetType,
+  onChangeRir,
   onCommitEdit,
   onDelete
 }: SetRowProps) => {
@@ -116,12 +120,44 @@ export const SetRow = ({
   const shouldShowDotPicker = !showSetTypeTags;
   const repsInputRef = useRef<HTMLInputElement>(null);
   const weightInputRef = useRef<HTMLInputElement>(null);
+  const [isRirPickerOpen, setIsRirPickerOpen] = useState(false);
+  const [isSavingRir, setIsSavingRir] = useState(false);
+  const [rirSaveError, setRirSaveError] = useState<string | null>(null);
   const commitCurrentValues = () => {
-    onCommitEdit({
+    void onCommitEdit({
       reps: parseIntegerValue(repsInputRef.current?.value ?? repsValue),
       weightLbs: parseWeightFromInput(weightInputRef.current?.value ?? weightValue, preferredUnit),
-      setType: set.setType
-    });
+      setType: set.setType,
+      rir: set.rir
+    }).catch(() => undefined);
+  };
+  const selectRir = async (rir: number | null) => {
+    if (isSavingRir) {
+      return;
+    }
+
+    setRirSaveError(null);
+    if (!set.completed) {
+      onChangeRir(rir);
+      setIsRirPickerOpen(false);
+      return;
+    }
+
+    setIsSavingRir(true);
+    try {
+      await onCommitEdit({
+        reps: set.reps,
+        weightLbs: set.weightLbs,
+        setType: set.setType,
+        rir
+      });
+      onChangeRir(rir);
+      setIsRirPickerOpen(false);
+    } catch {
+      setRirSaveError("NOT SAVED");
+    } finally {
+      setIsSavingRir(false);
+    }
   };
   const rowStateClass = set.completed
     ? "bg-[#101010]"
@@ -165,10 +201,11 @@ export const SetRow = ({
   );
 
   return (
-    <div className={`flex min-h-[52px] w-full items-center border-b border-[#2e2e2e] px-3 pt-[10px] ${isBarbell ? "pb-[25px]" : "pb-[10px]"} ${rowStateClass}`}>
-      {statusSlot}
+    <div className={`w-full border-b border-[#2e2e2e] ${rowStateClass}`}>
+      <div className={`flex min-h-[52px] items-center px-3 pt-[10px] ${isBarbell ? "pb-[25px]" : "pb-[10px]"}`}>
+        {statusSlot}
 
-      <div className="flex min-w-0 flex-1 items-center">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-y-1">
         <input
           ref={repsInputRef}
           inputMode="numeric"
@@ -206,6 +243,23 @@ export const SetRow = ({
           <span className={`ml-2 font-data text-[14px] ${directionClassMap[directionSymbol]}`}>{directionSymbol}</span>
         ) : null}
 
+        <button
+          type="button"
+          onClick={() => {
+            if (!isSavingRir) {
+              setRirSaveError(null);
+              setIsRirPickerOpen((previous) => !previous);
+            }
+          }}
+          disabled={isSavingRir}
+          aria-expanded={isRirPickerOpen}
+          aria-label={`Set ${set.setNumber} RIR${set.rir === null ? ", not recorded" : `, ${set.rir}`}`}
+          className="ml-2 inline-flex h-8 shrink-0 items-center gap-1 border border-[#2e2e2e] px-2 text-[#8a8478] hover:border-[#c8922a] hover:text-[#c8922a] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <span className="font-display text-[10px] font-medium uppercase tracking-[0.06em]">RIR</span>
+          <span className="font-data text-[12px]">{set.rir === null ? "—" : set.rir}</span>
+        </button>
+
         {showSetTypeTags ? (
           <div className="ml-2">
             <SetTypeDropdown
@@ -231,7 +285,53 @@ export const SetRow = ({
             <path d="M14 11v6" />
           </svg>
         </button>
+        </div>
       </div>
+
+      {isRirPickerOpen ? (
+        <div className="ml-[46px] mr-3 border-t border-[#2e2e2e] pb-3 pt-2">
+          <p className="mb-2 font-display text-[10px] font-medium uppercase tracking-[0.08em] text-[#4a4740]">
+            Reps In Reserve
+          </p>
+          <div className="grid grid-cols-6 gap-1.5">
+            {RIR_OPTIONS.map((rir) => {
+              const isSelected = set.rir === rir;
+              return (
+                <button
+                  key={rir}
+                  type="button"
+                  onClick={() => {
+                    void selectRir(rir);
+                  }}
+                  disabled={isSavingRir}
+                  className={`h-9 border font-data text-[14px] ${
+                    isSelected
+                      ? "border-[#c8922a] bg-[#2a1f0a] text-[#c8922a]"
+                      : "border-[#2e2e2e] bg-[#1c1c1c] text-[#8a8478] hover:border-[#c8922a] hover:text-[#c8922a]"
+                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                >
+                  {rir}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              void selectRir(null);
+            }}
+            disabled={isSavingRir}
+            className="mt-2 h-8 w-full border border-[#2e2e2e] font-display text-[10px] font-medium uppercase tracking-[0.08em] text-[#8a8478] hover:border-[#c8922a] hover:text-[#c8922a] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Clear RIR
+          </button>
+          {rirSaveError ? (
+            <p className="mt-2 font-data text-[11px] text-[#b84040]" role="alert">
+              {rirSaveError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 };

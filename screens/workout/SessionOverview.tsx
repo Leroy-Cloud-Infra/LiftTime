@@ -72,6 +72,7 @@ const createMockSession = (): WorkoutSession => {
             setType: "warmup",
             completed: false,
             completedAt: null,
+            rir: null,
             suggestionDirection: "hold",
             weightEdited: false
           },
@@ -83,6 +84,7 @@ const createMockSession = (): WorkoutSession => {
             setType: "working",
             completed: false,
             completedAt: null,
+            rir: null,
             suggestionDirection: "up",
             weightEdited: false
           },
@@ -94,6 +96,7 @@ const createMockSession = (): WorkoutSession => {
             setType: "working",
             completed: false,
             completedAt: null,
+            rir: null,
             suggestionDirection: "up",
             weightEdited: false
           }
@@ -119,6 +122,7 @@ const createMockSession = (): WorkoutSession => {
             setType: "working",
             completed: false,
             completedAt: null,
+            rir: null,
             suggestionDirection: "hold",
             weightEdited: false
           },
@@ -130,6 +134,7 @@ const createMockSession = (): WorkoutSession => {
             setType: "working",
             completed: false,
             completedAt: null,
+            rir: null,
             suggestionDirection: "hold",
             weightEdited: false
           },
@@ -141,6 +146,7 @@ const createMockSession = (): WorkoutSession => {
             setType: "working",
             completed: false,
             completedAt: null,
+            rir: null,
             suggestionDirection: "hold",
             weightEdited: false
           }
@@ -166,6 +172,7 @@ const createMockSession = (): WorkoutSession => {
             setType: "working",
             completed: false,
             completedAt: null,
+            rir: null,
             suggestionDirection: "hold",
             weightEdited: false
           },
@@ -177,6 +184,7 @@ const createMockSession = (): WorkoutSession => {
             setType: "working",
             completed: false,
             completedAt: null,
+            rir: null,
             suggestionDirection: "hold",
             weightEdited: false
           },
@@ -188,6 +196,7 @@ const createMockSession = (): WorkoutSession => {
             setType: "working",
             completed: false,
             completedAt: null,
+            rir: null,
             suggestionDirection: "hold",
             weightEdited: false
           }
@@ -213,6 +222,7 @@ const createMockSession = (): WorkoutSession => {
             setType: "working",
             completed: false,
             completedAt: null,
+            rir: null,
             suggestionDirection: "hold",
             weightEdited: false
           },
@@ -224,6 +234,7 @@ const createMockSession = (): WorkoutSession => {
             setType: "working",
             completed: false,
             completedAt: null,
+            rir: null,
             suggestionDirection: "hold",
             weightEdited: false
           },
@@ -235,6 +246,7 @@ const createMockSession = (): WorkoutSession => {
             setType: "working",
             completed: false,
             completedAt: null,
+            rir: null,
             suggestionDirection: "hold",
             weightEdited: false
           }
@@ -425,6 +437,7 @@ const mapDbSessionToUi = (result: ActiveWorkoutBootstrapResult): WorkoutSession 
           weightLbs: setRow.weight_lbs,
           reps: setRow.reps,
           setType: setRow.set_type,
+          rir: setRow.rir,
           completed: setRow.completed,
           completedAt: setRow.completed_at,
           suggestionDirection: "hold",
@@ -768,6 +781,7 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
                   weightLbs: createdSet.weight_lbs,
                   reps: createdSet.reps,
                   setType: createdSet.set_type,
+                  rir: createdSet.rir,
                   completed: createdSet.completed,
                   completedAt: createdSet.completed_at,
                   suggestionDirection: lastSet?.suggestionDirection ?? "hold",
@@ -856,15 +870,16 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
       setType: payload.setType,
       weightLbs: payload.weightLbs,
       reps: payload.reps,
+      rir: payload.rir,
       completedAt: payload.completedAt
     });
   };
 
-  const commitSetEdit = (
+  const commitSetEdit = async (
     exerciseId: string,
     setId: string,
-    payload: { reps: number | null; weightLbs: number | null; setType: SetType }
-  ) => {
+    payload: { reps: number | null; weightLbs: number | null; setType: SetType; rir: number | null }
+  ): Promise<void> => {
     const exercise = session.exercises.find((candidate) => candidate.id === exerciseId);
     const setRow = exercise?.sets.find((candidate) => candidate.id === setId);
     if (!setRow?.completed) {
@@ -873,24 +888,24 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
 
     if (payload.reps === null || payload.reps <= 0) {
       setPersistenceError("Completed sets must keep reps greater than 0.");
-      return;
+      throw new Error("INVALID_COMPLETED_SET_REPS");
     }
 
-    void (async () => {
-      try {
-        await persistUpdateSet({
-          workoutExerciseId: exerciseId,
-          setId,
-          weightLbs: payload.weightLbs,
-          reps: payload.reps,
-          setType: payload.setType
-        });
-        setPersistenceError(null);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to save set edit.";
-        setPersistenceError(message);
-      }
-    })();
+    try {
+      await persistUpdateSet({
+        workoutExerciseId: exerciseId,
+        setId,
+        weightLbs: payload.weightLbs,
+        reps: payload.reps,
+        rir: payload.rir,
+        setType: payload.setType
+      });
+      setPersistenceError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save set edit.";
+      setPersistenceError(message);
+      throw error;
+    }
   };
 
   const hasMoreExercisesFromTarget = (targetValue: DetailTarget) => {
@@ -1150,6 +1165,7 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
       onSaveSet={async (payload) => {
         await saveSet(payload);
         updateSet(payload.workoutExerciseId, payload.setId, {
+          rir: payload.rir,
           completed: true,
           completedAt: payload.completedAt
         });
