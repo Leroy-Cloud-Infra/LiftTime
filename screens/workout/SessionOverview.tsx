@@ -13,13 +13,14 @@ import {
   deleteWorkoutExercises as persistDeleteWorkoutExercises,
   finishWorkoutSession as persistFinishWorkoutSession,
   reorderWorkoutExercises as persistReorderWorkoutExercises,
+  startWorkoutSession as persistStartWorkoutSession,
   updateSet as persistUpdateSet,
-  type BootstrapWorkoutExerciseInput,
+  type ActiveWorkoutBootstrapResult,
   type DbExerciseCatalog,
   type DbWorkoutExercise,
   type DbWorkoutSet,
   type FinishedWorkoutSessionSummary,
-  type LoadOrCreateSessionResult
+  type WorkoutBootstrapResult
 } from "@/components/workout/workoutDataClient";
 import { ExerciseDetail, type PersistSetPayload } from "@/screens/workout/ExerciseDetail";
 import { ExerciseDetailSheet } from "@/screens/workout/ExerciseDetailSheet";
@@ -69,8 +70,8 @@ const createMockSession = (): WorkoutSession => {
             weightLbs: 135,
             reps: 10,
             setType: "warmup",
-            completed: true,
-            completedAt: now,
+            completed: false,
+            completedAt: null,
             suggestionDirection: "hold",
             weightEdited: false
           },
@@ -403,33 +404,7 @@ const toTitleCase = (value: string) => {
   return value[0].toUpperCase() + value.slice(1);
 };
 
-const buildBootstrapExercises = (
-  templateSession: WorkoutSession,
-  seededExerciseIdByTemplateId: Record<string, string>
-): BootstrapWorkoutExerciseInput[] => {
-  return sortedExercises(templateSession.exercises).map((exercise) => {
-    const seededExerciseId = seededExerciseIdByTemplateId[exercise.id];
-    if (!seededExerciseId) {
-      throw new Error(`MISSING_SEEDED_EXERCISE_FOR_TEMPLATE:${exercise.id}`);
-    }
-
-    return {
-      exerciseId: seededExerciseId,
-      orderIndex: exercise.order,
-      supersetGroupId: exercise.supersetGroupId,
-      sets: exercise.sets.map((setRow) => ({
-        setNumber: setRow.setNumber,
-        setType: setRow.setType,
-        weightLbs: setRow.weightLbs,
-        reps: setRow.reps,
-        completed: setRow.completed,
-        completedAt: setRow.completedAt
-      }))
-    };
-  });
-};
-
-const mapDbSessionToUi = (result: LoadOrCreateSessionResult): WorkoutSession => {
+const mapDbSessionToUi = (result: ActiveWorkoutBootstrapResult): WorkoutSession => {
   const setsByWorkoutExerciseId = result.workoutSets.reduce<Record<string, DbWorkoutSet[]>>((accumulator, setRow) => {
     if (!accumulator[setRow.workout_exercise_id]) {
       accumulator[setRow.workout_exercise_id] = [];
@@ -556,6 +531,7 @@ interface SessionOverviewProps {
 export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) => {
   const [session, setSession] = useState<WorkoutSession>(() => createMockSession());
   const [isSessionLoading, setIsSessionLoading] = useState(true);
+  const [hasActiveSession, setHasActiveSession] = useState<boolean | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [preferences] = useState<WorkoutPreferences>(() => getStoredPreferences());
@@ -566,6 +542,8 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
   const [finishedSessionSummary, setFinishedSessionSummary] = useState<FinishedWorkoutSessionSummary | null>(null);
   const [isFinishingSession, setIsFinishingSession] = useState(false);
   const [finishSessionError, setFinishSessionError] = useState<string | null>(null);
+  const [isStartingSession, setIsStartingSession] = useState(false);
+  const [startSessionError, setStartSessionError] = useState<string | null>(null);
   const [activeCatalogExerciseIds, setActiveCatalogExerciseIds] = useState<ReadonlySet<string>>(() => new Set());
   const [isEditMode, setIsEditMode] = useState(false);
   const [selectedExerciseIds, setSelectedExerciseIds] = useState<string[]>([]);
@@ -609,8 +587,15 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
         throw new Error(errorCode);
       }
 
-      const loaded = (await response.json()) as LoadOrCreateSessionResult;
+      const loaded = (await response.json()) as WorkoutBootstrapResult;
+      if (!loaded.active) {
+        setHasActiveSession(false);
+        setActiveCatalogExerciseIds(new Set());
+        return true;
+      }
+
       setSession(mapDbSessionToUi(loaded));
+      setHasActiveSession(true);
       setActiveCatalogExerciseIds(new Set(loaded.workoutExercises.map((exercise) => exercise.exercise_id)));
       return true;
     } catch (loadError) {
@@ -629,6 +614,10 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
   }, [authenticatedUserId, refreshSession]);
 
   useEffect(() => {
+    if (!hasActiveSession) {
+      return undefined;
+    }
+
     const interval = window.setInterval(() => {
       setSession((previous) => {
         const nextElapsed = previous.elapsedSeconds + 1;
@@ -648,7 +637,7 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
     }, 1000);
 
     return () => window.clearInterval(interval);
-  }, []);
+  }, [hasActiveSession]);
 
   const exercises = useMemo(() => sortedExercises(session.exercises), [session.exercises]);
 
@@ -937,6 +926,28 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
     }
   };
 
+  const startWorkoutSession = async (): Promise<void> => {
+    if (isStartingSession) {
+      return;
+    }
+
+    setIsStartingSession(true);
+    setStartSessionError(null);
+
+    try {
+      await persistStartWorkoutSession();
+      const refreshed = await refreshSession(false);
+      if (!refreshed) {
+        throw new Error("WORKOUT_START_RECONCILIATION_FAILED");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to start a workout.";
+      setStartSessionError(message);
+    } finally {
+      setIsStartingSession(false);
+    }
+  };
+
   const inProgressRows = useMemo(() => {
     return buildGroupedRows(inProgressExercises);
   }, [inProgressExercises]);
@@ -1168,6 +1179,36 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
     return (
       <div className="flex h-dvh items-center justify-center bg-[#0d0d0d] px-4 text-center">
         <p className="font-data text-[13px] text-[#b84040]">{sessionError}</p>
+      </div>
+    );
+  }
+
+  if (hasActiveSession === false) {
+    return (
+      <div className="flex h-dvh w-full items-center justify-center bg-[#0d0d0d] px-4 text-[#e8e4dc]">
+        <main className="w-full max-w-[360px] border-2 border-[#2e2e2e] bg-[#141414] p-4 text-center">
+          <p className="font-display text-[22px] font-bold uppercase tracking-[0.08em] text-[#e8e4dc]">
+            No Active Workout
+          </p>
+          <p className="mt-3 font-data text-[13px] text-[#8a8478]">
+            Start a Push Day when you are ready to train.
+          </p>
+          {startSessionError ? (
+            <p className="mt-3 font-data text-[12px] text-[#b84040]" role="alert">
+              {startSessionError}
+            </p>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              void startWorkoutSession();
+            }}
+            disabled={isStartingSession}
+            className="mt-5 h-12 w-full border-2 border-[#8a6219] bg-[#c8922a] font-display text-[14px] font-bold uppercase tracking-[0.08em] text-[#0d0d0d] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isStartingSession ? "Starting..." : "Start Workout"}
+          </button>
+        </main>
       </div>
     );
   }
@@ -1601,7 +1642,11 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
         <div className="fixed inset-0 z-[90] bg-[#0d0d0d] px-3 py-4">
           <button
             type="button"
-            onClick={() => setStubScreen(null)}
+            onClick={() => {
+              setStubScreen(null);
+              setFinishedSessionSummary(null);
+              void refreshSession(true);
+            }}
             className="mb-3 inline-flex items-center gap-2 rounded-[3px] border-2 border-[#2e2e2e] px-[14px] py-[6px] font-display text-[14px] font-bold uppercase tracking-[0.08em] text-[#8a8478] hover:border-[#c8922a] hover:text-[#c8922a]"
           >
             <span className="font-data text-[16px]">←</span>

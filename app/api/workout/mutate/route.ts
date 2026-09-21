@@ -17,7 +17,8 @@ type MutationAction =
   | "delete_set"
   | "delete_workout_exercises"
   | "add_workout_exercise"
-  | "finish_workout_session";
+  | "finish_workout_session"
+  | "start_workout_session";
 type SetType = "working" | "warmup" | "drop" | "failure";
 
 interface CompleteSetPayload {
@@ -63,6 +64,8 @@ interface AddWorkoutExercisePayload {
 interface FinishWorkoutSessionPayload {
   sessionId: string;
 }
+
+type StartWorkoutSessionPayload = Record<string, never>;
 
 interface MutationRequestBody {
   action?: unknown;
@@ -135,6 +138,11 @@ interface WorkoutExerciseRpcRow {
   existing_workout_exercise_id: string | null;
 }
 
+interface StartWorkoutSessionRpcRow {
+  outcome: "created" | "already_active";
+  session_id: string;
+}
+
 interface WorkoutSetApiRow {
   id: string;
   workout_exercise_id: string;
@@ -172,7 +180,8 @@ type ParsedMutationRequest =
   | { action: "delete_set"; payload: DeleteSetPayload }
   | { action: "delete_workout_exercises"; payload: DeleteWorkoutExercisesPayload }
   | { action: "add_workout_exercise"; payload: AddWorkoutExercisePayload }
-  | { action: "finish_workout_session"; payload: FinishWorkoutSessionPayload };
+  | { action: "finish_workout_session"; payload: FinishWorkoutSessionPayload }
+  | { action: "start_workout_session"; payload: StartWorkoutSessionPayload };
 
 const allowedActions: readonly MutationAction[] = [
   "complete_set",
@@ -181,7 +190,8 @@ const allowedActions: readonly MutationAction[] = [
   "delete_set",
   "delete_workout_exercises",
   "add_workout_exercise",
-  "finish_workout_session"
+  "finish_workout_session",
+  "start_workout_session"
 ] as const;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -907,6 +917,34 @@ const addWorkoutExerciseWithDefaults = async (
   return result;
 };
 
+const startPushDayWorkoutSession = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  principalId: string
+): Promise<StartWorkoutSessionRpcRow> => {
+  const response = await fetch(buildRestUrl(supabaseUrl, "rpc/start_push_day_workout_session"), {
+    method: "POST",
+    headers: {
+      ...createServiceHeaders(serviceRoleKey),
+      Prefer: "return=representation"
+    },
+    body: JSON.stringify({ p_user_id: principalId }),
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    throw new Error("WORKOUT_SESSION_START_RPC_FAILED");
+  }
+
+  const rows = (await response.json()) as StartWorkoutSessionRpcRow[];
+  const result = rows[0];
+  if (!result || !result.session_id || (result.outcome !== "created" && result.outcome !== "already_active")) {
+    throw new Error("WORKOUT_SESSION_START_RPC_INVALID_RESPONSE");
+  }
+
+  return result;
+};
+
 const fetchAddedWorkoutSets = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -1185,6 +1223,14 @@ const parseFinishWorkoutSessionPayload = (payload: unknown): FinishWorkoutSessio
   return { sessionId: sessionId.trim() };
 };
 
+const parseStartWorkoutSessionPayload = (payload: unknown): StartWorkoutSessionPayload | null => {
+  if (payload === undefined) {
+    return {};
+  }
+
+  return isObject(payload) && Object.keys(payload).length === 0 ? {} : null;
+};
+
 const parseMutationRequest = (body: MutationRequestBody): ParsedMutationRequest | null => {
   if (!allowedActions.includes(body.action as MutationAction)) {
     return null;
@@ -1223,6 +1269,11 @@ const parseMutationRequest = (body: MutationRequestBody): ParsedMutationRequest 
   if (body.action === "finish_workout_session") {
     const payload = parseFinishWorkoutSessionPayload(body.payload);
     return payload ? { action: "finish_workout_session", payload } : null;
+  }
+
+  if (body.action === "start_workout_session") {
+    const payload = parseStartWorkoutSessionPayload(body.payload);
+    return payload ? { action: "start_workout_session", payload } : null;
   }
 
   return null;
@@ -1508,6 +1559,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           action: "delete_workout_exercises",
           data: {
             deletedWorkoutExerciseIds: deletableIds
+          }
+        });
+      } catch {
+        return mutationFailedResponse();
+      }
+    case "start_workout_session":
+      try {
+        const result = await startPushDayWorkoutSession(
+          env.supabaseUrl,
+          env.supabaseServiceRoleKey,
+          sessionCheck.payload.sub
+        );
+
+        return NextResponse.json({
+          ok: true,
+          action: "start_workout_session",
+          data: {
+            outcome: result.outcome,
+            sessionId: result.session_id
           }
         });
       } catch {
