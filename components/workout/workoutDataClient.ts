@@ -1,19 +1,10 @@
 "use client";
 
 import {
-  deleteRows,
   fetchRows,
-  fetchSingleRow,
-  getAuthenticatedUser,
-  insertRow,
   updateRows
 } from "@/components/admin/supabaseClient";
 import type { SetType } from "@/types/workout";
-
-export interface AuthenticatedWorkoutUser {
-  id: string;
-  email: string;
-}
 
 export interface DbWorkoutSession {
   id: string;
@@ -55,46 +46,19 @@ export interface DbExerciseCatalog {
   progressive_overload_notes: string | null;
 }
 
-export interface SessionExerciseBundle {
-  workoutExercises: DbWorkoutExercise[];
-  workoutSets: DbWorkoutSet[];
-  exercisesById: Record<string, DbExerciseCatalog>;
-}
-
-export interface BootstrapSetInput {
-  setNumber: number;
-  setType: SetType;
-  weightLbs: number | null;
-  reps: number | null;
-  completed?: boolean;
-  completedAt?: string | null;
-}
-
-export interface BootstrapWorkoutExerciseInput {
-  exerciseId: string;
-  orderIndex: number;
-  supersetGroupId?: string | null;
-  sets: BootstrapSetInput[];
-}
-
-export interface BootstrapWorkoutParams {
-  sessionId: string;
-  exercises: BootstrapWorkoutExerciseInput[];
-}
-
-export interface LoadOrCreateSessionParams {
-  userId: string;
-  name: string | null;
-  bootstrapExercises: BootstrapWorkoutExerciseInput[];
-}
-
-export interface LoadOrCreateSessionResult {
+export interface ActiveWorkoutBootstrapResult {
+  active: true;
   session: DbWorkoutSession;
   workoutExercises: DbWorkoutExercise[];
   workoutSets: DbWorkoutSet[];
   exercisesById: Record<string, DbExerciseCatalog>;
-  created: boolean;
 }
+
+export interface NoActiveWorkoutBootstrapResult {
+  active: false;
+}
+
+export type WorkoutBootstrapResult = ActiveWorkoutBootstrapResult | NoActiveWorkoutBootstrapResult;
 
 export interface CompleteSetParams {
   workoutExerciseId: string;
@@ -140,6 +104,11 @@ export interface FinishWorkoutSessionParams {
   sessionId: string;
 }
 
+export interface StartedWorkoutSessionResult {
+  outcome: "created" | "already_active";
+  sessionId: string;
+}
+
 export interface FinishedWorkoutSessionSummary {
   session: {
     id: string;
@@ -151,14 +120,6 @@ export interface FinishedWorkoutSessionSummary {
   completedSetCount: number;
   totalSetCount: number;
 }
-
-const buildInFilter = (values: string[]): string | undefined => {
-  if (values.length === 0) {
-    return undefined;
-  }
-
-  return `in.(${values.join(",")})`;
-};
 
 const uniqueStrings = (values: string[]): string[] => {
   return [...new Set(values)];
@@ -203,161 +164,6 @@ const normalizeSetNumbers = async (workoutExerciseId: string): Promise<void> => 
       { id: `eq.${rows[index].id}`, workout_exercise_id: `eq.${workoutExerciseId}` },
       { set_number: expectedNumber }
     );
-  }
-};
-
-export const requireAuthenticatedUser = async (): Promise<AuthenticatedWorkoutUser> => {
-  const user = await getAuthenticatedUser();
-  if (!user) {
-    throw new Error("AUTH_REQUIRED");
-  }
-
-  return {
-    id: user.id,
-    email: user.email
-  };
-};
-
-export const fetchActiveWorkoutSession = async (userId: string): Promise<DbWorkoutSession | null> => {
-  return fetchSingleRow<DbWorkoutSession>("workout_sessions", {
-    select: "*",
-    user_id: `eq.${userId}`,
-    status: "eq.active",
-    order: "started_at.desc"
-  });
-};
-
-export const fetchSessionExercisesWithSets = async (sessionId: string): Promise<SessionExerciseBundle> => {
-  const workoutExercises = await fetchRows<DbWorkoutExercise>("workout_exercises", {
-    select: "*",
-    session_id: `eq.${sessionId}`,
-    order: "order_index.asc"
-  });
-
-  if (workoutExercises.length === 0) {
-    return {
-      workoutExercises: [],
-      workoutSets: [],
-      exercisesById: {}
-    };
-  }
-
-  const workoutExerciseIds = workoutExercises.map((exercise) => exercise.id);
-  const workoutSets = await fetchRows<DbWorkoutSet>("workout_sets", {
-    select: "*",
-    workout_exercise_id: buildInFilter(workoutExerciseIds),
-    order: "set_number.asc"
-  });
-
-  const exerciseIds = uniqueStrings(workoutExercises.map((exercise) => exercise.exercise_id));
-  const exerciseCatalogRows = await fetchRows<DbExerciseCatalog>("exercises", {
-    select: "id,name,equipment,muscle_groups,instructions,cues,progressive_overload_notes",
-    id: buildInFilter(exerciseIds)
-  });
-
-  const exercisesById = exerciseCatalogRows.reduce<Record<string, DbExerciseCatalog>>((accumulator, row) => {
-    accumulator[row.id] = row;
-    return accumulator;
-  }, {});
-
-  return {
-    workoutExercises,
-    workoutSets,
-    exercisesById
-  };
-};
-
-export const createActiveWorkoutSession = async (
-  userId: string,
-  name: string | null
-): Promise<DbWorkoutSession> => {
-  return insertRow<DbWorkoutSession>("workout_sessions", {
-    user_id: userId,
-    name,
-    status: "active"
-  });
-};
-
-export const bootstrapWorkoutExercisesAndSets = async (
-  params: BootstrapWorkoutParams
-): Promise<{ workoutExercises: DbWorkoutExercise[]; workoutSets: DbWorkoutSet[] }> => {
-  const sortedExercises = [...params.exercises].sort((left, right) => left.orderIndex - right.orderIndex);
-  const createdExercises: DbWorkoutExercise[] = [];
-  const createdSets: DbWorkoutSet[] = [];
-
-  for (const exercise of sortedExercises) {
-    const createdExercise = await insertRow<DbWorkoutExercise>("workout_exercises", {
-      session_id: params.sessionId,
-      exercise_id: exercise.exerciseId,
-      order_index: exercise.orderIndex,
-      superset_group_id: exercise.supersetGroupId ?? null
-    });
-
-    createdExercises.push(createdExercise);
-
-    const sortedSets = [...exercise.sets].sort((left, right) => left.setNumber - right.setNumber);
-    for (const set of sortedSets) {
-      const completed = set.completed ?? false;
-      const completedAt = completed ? (set.completedAt ?? new Date().toISOString()) : null;
-
-      const createdSet = await insertRow<DbWorkoutSet>("workout_sets", {
-        workout_exercise_id: createdExercise.id,
-        set_number: set.setNumber,
-        set_type: set.setType,
-        weight_lbs: set.weightLbs,
-        reps: set.reps,
-        completed,
-        completed_at: completedAt
-      });
-
-      createdSets.push(createdSet);
-    }
-  }
-
-  return {
-    workoutExercises: createdExercises,
-    workoutSets: createdSets
-  };
-};
-
-export const loadOrCreateActiveSession = async (
-  params: LoadOrCreateSessionParams
-): Promise<LoadOrCreateSessionResult> => {
-  const existing = await fetchActiveWorkoutSession(params.userId);
-  if (existing) {
-    const related = await fetchSessionExercisesWithSets(existing.id);
-    return {
-      session: existing,
-      ...related,
-      created: false
-    };
-  }
-
-  try {
-    const createdSession = await createActiveWorkoutSession(params.userId, params.name);
-    await bootstrapWorkoutExercisesAndSets({
-      sessionId: createdSession.id,
-      exercises: params.bootstrapExercises
-    });
-
-    const related = await fetchSessionExercisesWithSets(createdSession.id);
-    return {
-      session: createdSession,
-      ...related,
-      created: true
-    };
-  } catch (error) {
-    const raced = await fetchActiveWorkoutSession(params.userId);
-    if (raced) {
-      const related = await fetchSessionExercisesWithSets(raced.id);
-      return {
-        session: raced,
-        ...related,
-        created: false
-      };
-    }
-
-    throw error;
   }
 };
 
@@ -587,6 +393,42 @@ export const finishWorkoutSession = async (
       ok?: boolean;
       error?: string;
       data?: FinishedWorkoutSessionSummary;
+    };
+  } catch {
+    parsed = null;
+  }
+
+  if (!response.ok || parsed?.ok !== true || !parsed.data) {
+    throw new Error(parsed?.error ?? "MUTATION_FAILED");
+  }
+
+  return parsed.data;
+};
+
+export const startWorkoutSession = async (): Promise<StartedWorkoutSessionResult> => {
+  const response = await fetch("/api/workout/mutate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      action: "start_workout_session",
+      payload: {}
+    })
+  });
+
+  let parsed:
+    | {
+        ok?: boolean;
+        error?: string;
+        data?: StartedWorkoutSessionResult;
+      }
+    | null = null;
+  try {
+    parsed = (await response.json()) as {
+      ok?: boolean;
+      error?: string;
+      data?: StartedWorkoutSessionResult;
     };
   } catch {
     parsed = null;
