@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ExerciseBrowser } from "@/components/workout/ExerciseBrowser";
+import { copyWorkoutToClipboard, formatWorkoutForClipboard, type ClipboardWorkoutSummary } from "@/components/workout/workoutClipboard";
 import { ExerciseRow } from "@/components/workout/ExerciseRow";
 import { SupersetRow } from "@/components/workout/SupersetRow";
 import { TimerStrip } from "@/components/workout/TimerStrip";
@@ -553,6 +554,9 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
   const [showFinishConfirm, setShowFinishConfirm] = useState(false);
   const [stubScreen, setStubScreen] = useState<"exercise-browser" | "session-summary" | null>(null);
   const [finishedSessionSummary, setFinishedSessionSummary] = useState<FinishedWorkoutSessionSummary | null>(null);
+  const [finishedWorkoutForClipboard, setFinishedWorkoutForClipboard] = useState<WorkoutSession | null>(null);
+  const [isCopyingWorkout, setIsCopyingWorkout] = useState(false);
+  const [copyWorkoutMessage, setCopyWorkoutMessage] = useState<string | null>(null);
   const [isFinishingSession, setIsFinishingSession] = useState(false);
   const [finishSessionError, setFinishSessionError] = useState<string | null>(null);
   const [isStartingSession, setIsStartingSession] = useState(false);
@@ -927,8 +931,11 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
     setFinishSessionError(null);
 
     try {
+      const workoutSnapshot = session;
       const summary = await persistFinishWorkoutSession({ sessionId: session.id });
       setFinishedSessionSummary(summary);
+      setFinishedWorkoutForClipboard(workoutSnapshot);
+      setCopyWorkoutMessage(null);
       setShowFinishConfirm(false);
       setDetailTarget(null);
       setStubScreen("session-summary");
@@ -938,6 +945,30 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
       throw error;
     } finally {
       setIsFinishingSession(false);
+    }
+  };
+
+  const copyFinishedWorkout = async (): Promise<void> => {
+    if (!finishedSessionSummary || !finishedWorkoutForClipboard || isCopyingWorkout) {
+      return;
+    }
+
+    setIsCopyingWorkout(true);
+    setCopyWorkoutMessage(null);
+
+    const clipboardSummary: ClipboardWorkoutSummary = {
+      status: finishedSessionSummary.session.status,
+      startedAt: finishedSessionSummary.session.startedAt,
+      endedAt: finishedSessionSummary.session.endedAt
+    };
+
+    try {
+      await copyWorkoutToClipboard(formatWorkoutForClipboard(finishedWorkoutForClipboard, clipboardSummary));
+      setCopyWorkoutMessage("COPIED");
+    } catch {
+      setCopyWorkoutMessage("COPY FAILED");
+    } finally {
+      setIsCopyingWorkout(false);
     }
   };
 
@@ -1661,6 +1692,8 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
             onClick={() => {
               setStubScreen(null);
               setFinishedSessionSummary(null);
+              setFinishedWorkoutForClipboard(null);
+              setCopyWorkoutMessage(null);
               void refreshSession(true);
             }}
             className="mb-3 inline-flex items-center gap-2 rounded-[3px] border-2 border-[#2e2e2e] px-[14px] py-[6px] font-display text-[14px] font-bold uppercase tracking-[0.08em] text-[#8a8478] hover:border-[#c8922a] hover:text-[#c8922a]"
@@ -1690,6 +1723,21 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
                 <p>
                   {finishedSessionSummary.completedSetCount}/{finishedSessionSummary.totalSetCount} sets logged
                 </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void copyFinishedWorkout();
+                  }}
+                  disabled={isCopyingWorkout}
+                  className="mt-4 h-11 w-full rounded-[4px] border-2 border-[#c8922a] px-3 font-display text-[14px] font-bold uppercase tracking-[0.08em] text-[#c8922a] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isCopyingWorkout ? "Copying..." : "Copy Workout"}
+                </button>
+                {copyWorkoutMessage ? (
+                  <p className={copyWorkoutMessage === "COPIED" ? "mt-2 font-display text-[12px] uppercase text-[#6f9f68]" : "mt-2 font-display text-[12px] uppercase text-[#b84040]"}>
+                    {copyWorkoutMessage}
+                  </p>
+                ) : null}
               </div>
             ) : (
               <p className="mt-2 font-data text-[13px] text-[#8a8478]">No finished session summary is available.</p>
