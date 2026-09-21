@@ -31,6 +31,7 @@ export interface DbWorkoutSet {
   set_type: SetType;
   weight_lbs: number | null;
   reps: number | null;
+  rir: number | null;
   completed: boolean;
   completed_at: string | null;
   created_at: string;
@@ -67,6 +68,7 @@ export interface CompleteSetParams {
   setType: SetType;
   weightLbs: number | null;
   reps: number | null;
+  rir: number | null;
   completedAt: string;
 }
 
@@ -87,6 +89,7 @@ export interface UpdateSetParams {
   setId: string;
   weightLbs: number | null;
   reps: number | null;
+  rir: number | null;
   setType: SetType;
 }
 
@@ -186,6 +189,7 @@ export const completeSet = async (params: CompleteSetParams): Promise<void> => {
         setType: params.setType,
         weightLbs: params.weightLbs,
         reps: params.reps,
+        rir: params.rir,
         completedAt: params.completedAt
       }
     })

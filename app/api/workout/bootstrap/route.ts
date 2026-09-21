@@ -32,6 +32,7 @@ interface DbWorkoutSet {
   set_type: SetType;
   weight_lbs: number | null;
   reps: number | null;
+  rir: number | null;
   completed: boolean;
   completed_at: string | null;
   created_at: string;

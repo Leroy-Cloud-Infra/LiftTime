@@ -28,6 +28,7 @@ export interface ExerciseSet {
   weightLbs: number | null;
   reps: number | null;
   setType: SetType;
+  rir: number | null;
   completed: boolean;
   completedAt: string | null;
   suggestionDirection: OverloadDirection | null;
