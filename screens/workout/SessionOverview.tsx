@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
+import { ExerciseBrowser } from "@/components/workout/ExerciseBrowser";
 import { ExerciseRow } from "@/components/workout/ExerciseRow";
 import { SupersetRow } from "@/components/workout/SupersetRow";
 import { TimerStrip } from "@/components/workout/TimerStrip";
@@ -539,6 +540,7 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
   const [isDesktop, setIsDesktop] = useState(false);
   const [showFinishConfirm, setShowFinishConfirm] = useState(false);
   const [stubScreen, setStubScreen] = useState<"exercise-browser" | "session-summary" | null>(null);
+  const [activeCatalogExerciseIds, setActiveCatalogExerciseIds] = useState<ReadonlySet<string>>(() => new Set());
   const [isEditMode, setIsEditMode] = useState(false);
   const [selectedExerciseIds, setSelectedExerciseIds] = useState<string[]>([]);
   const [draggingRowKey, setDraggingRowKey] = useState<string | null>(null);
@@ -555,60 +557,50 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
     return () => media.removeEventListener("change", sync);
   }, []);
 
-  useEffect(() => {
-    let active = true;
-
-    const loadSession = async () => {
+  const refreshSession = useCallback(async (showLoading: boolean): Promise<boolean> => {
+    if (showLoading) {
       setIsSessionLoading(true);
-      setSessionError(null);
+    }
+    setSessionError(null);
 
-      try {
-        const response = await fetch("/api/workout/bootstrap", {
-          method: "GET",
-          cache: "no-store"
-        });
+    try {
+      const response = await fetch("/api/workout/bootstrap", {
+        method: "GET",
+        cache: "no-store"
+      });
 
-        if (!response.ok) {
-          let errorCode = "WORKOUT_BOOTSTRAP_FAILED";
-          try {
-            const errorPayload = (await response.json()) as WorkoutBootstrapErrorResponse;
-            if (errorPayload.error && errorPayload.error.trim().length > 0) {
-              errorCode = errorPayload.error.trim();
-            }
-          } catch {
-            // Keep fallback error code.
+      if (!response.ok) {
+        let errorCode = "WORKOUT_BOOTSTRAP_FAILED";
+        try {
+          const errorPayload = (await response.json()) as WorkoutBootstrapErrorResponse;
+          if (errorPayload.error && errorPayload.error.trim().length > 0) {
+            errorCode = errorPayload.error.trim();
           }
-
-          throw new Error(errorCode);
+        } catch {
+          // Keep fallback error code.
         }
 
-        const loaded = (await response.json()) as LoadOrCreateSessionResult;
-
-        if (!active) {
-          return;
-        }
-
-        setSession(mapDbSessionToUi(loaded));
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-
-        const message = loadError instanceof Error ? loadError.message : "Failed to load workout session.";
-        setSessionError(message);
-      } finally {
-        if (active) {
-          setIsSessionLoading(false);
-        }
+        throw new Error(errorCode);
       }
-    };
 
-    void loadSession();
+      const loaded = (await response.json()) as LoadOrCreateSessionResult;
+      setSession(mapDbSessionToUi(loaded));
+      setActiveCatalogExerciseIds(new Set(loaded.workoutExercises.map((exercise) => exercise.exercise_id)));
+      return true;
+    } catch (loadError) {
+      const message = loadError instanceof Error ? loadError.message : "Failed to load workout session.";
+      setSessionError(message);
+      return false;
+    } finally {
+      if (showLoading) {
+        setIsSessionLoading(false);
+      }
+    }
+  }, []);
 
-    return () => {
-      active = false;
-    };
-  }, [authenticatedUserId]);
+  useEffect(() => {
+    void refreshSession(true);
+  }, [authenticatedUserId, refreshSession]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -1533,7 +1525,22 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
         </div>
       ) : null}
 
-      {stubScreen ? (
+      {stubScreen === "exercise-browser" ? (
+        <ExerciseBrowser
+          sessionId={session.id}
+          addedExerciseIds={activeCatalogExerciseIds}
+          onClose={() => setStubScreen(null)}
+          onAddSuccess={async () => {
+            const refreshed = await refreshSession(false);
+            if (!refreshed) {
+              throw new Error("WORKOUT_REFRESH_FAILED");
+            }
+            setStubScreen(null);
+          }}
+        />
+      ) : null}
+
+      {stubScreen === "session-summary" ? (
         <div className="fixed inset-0 z-[90] bg-[#0d0d0d] px-3 py-4">
           <button
             type="button"
@@ -1545,7 +1552,7 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
           </button>
           <div className="rounded-[4px] border-2 border-[#2e2e2e] bg-[#141414] p-4">
             <h2 className="mb-4 font-display text-[18px] uppercase text-[#e8e4dc]">
-              {stubScreen === "exercise-browser" ? "Exercise Browser" : "Session Summary"}
+              Session Summary
             </h2>
             <p className="mt-2 font-data text-[13px] text-[#8a8478]">Placeholder screen stub.</p>
           </div>
