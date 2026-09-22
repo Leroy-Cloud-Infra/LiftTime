@@ -1,9 +1,3 @@
-"use client";
-
-import {
-  fetchRows,
-  updateRows
-} from "@/components/admin/supabaseClient";
 import type { SetType } from "@/types/workout";
 
 export interface DbWorkoutSession {
@@ -93,11 +87,6 @@ export interface UpdateSetParams {
   setType: SetType;
 }
 
-export interface ReorderWorkoutExercisesParams {
-  sessionId: string;
-  orderedWorkoutExerciseIds: string[];
-}
-
 export interface DeleteWorkoutExercisesParams {
   sessionId: string;
   workoutExerciseIds: string[];
@@ -126,48 +115,6 @@ export interface FinishedWorkoutSessionSummary {
 
 const uniqueStrings = (values: string[]): string[] => {
   return [...new Set(values)];
-};
-
-const normalizeSessionOrderIndexes = async (sessionId: string): Promise<void> => {
-  const rows = await fetchRows<Pick<DbWorkoutExercise, "id" | "order_index">>("workout_exercises", {
-    select: "id,order_index",
-    session_id: `eq.${sessionId}`,
-    order: "order_index.asc"
-  });
-
-  for (let index = 0; index < rows.length; index += 1) {
-    const expectedOrder = index + 1;
-    if (rows[index].order_index === expectedOrder) {
-      continue;
-    }
-
-    await updateRows<DbWorkoutExercise>(
-      "workout_exercises",
-      { id: `eq.${rows[index].id}`, session_id: `eq.${sessionId}` },
-      { order_index: expectedOrder }
-    );
-  }
-};
-
-const normalizeSetNumbers = async (workoutExerciseId: string): Promise<void> => {
-  const rows = await fetchRows<Pick<DbWorkoutSet, "id" | "set_number">>("workout_sets", {
-    select: "id,set_number",
-    workout_exercise_id: `eq.${workoutExerciseId}`,
-    order: "set_number.asc"
-  });
-
-  for (let index = 0; index < rows.length; index += 1) {
-    const expectedNumber = index + 1;
-    if (rows[index].set_number === expectedNumber) {
-      continue;
-    }
-
-    await updateRows<DbWorkoutSet>(
-      "workout_sets",
-      { id: `eq.${rows[index].id}`, workout_exercise_id: `eq.${workoutExerciseId}` },
-      { set_number: expectedNumber }
-    );
-  }
 };
 
 export const completeSet = async (params: CompleteSetParams): Promise<void> => {
@@ -308,38 +255,6 @@ export const updateSet = async (params: UpdateSetParams): Promise<void> => {
 
   if (!response.ok || parsed?.ok !== true) {
     throw new Error(parsed?.error ?? "MUTATION_FAILED");
-  }
-};
-
-export const reorderWorkoutExercises = async (params: ReorderWorkoutExercisesParams): Promise<void> => {
-  const existing = await fetchRows<Pick<DbWorkoutExercise, "id">>("workout_exercises", {
-    select: "id",
-    session_id: `eq.${params.sessionId}`
-  });
-
-  const existingIds = existing.map((row) => row.id);
-  const orderedIds = params.orderedWorkoutExerciseIds;
-
-  if (existingIds.length !== orderedIds.length) {
-    throw new Error("INVALID_REORDER_PAYLOAD");
-  }
-
-  const existingSet = new Set(existingIds);
-  if (!orderedIds.every((id) => existingSet.has(id))) {
-    throw new Error("INVALID_REORDER_PAYLOAD");
-  }
-
-  for (let index = 0; index < orderedIds.length; index += 1) {
-    await updateRows<DbWorkoutExercise>(
-      "workout_exercises",
-      {
-        id: `eq.${orderedIds[index]}`,
-        session_id: `eq.${params.sessionId}`
-      },
-      {
-        order_index: index + 1
-      }
-    );
   }
 };
 

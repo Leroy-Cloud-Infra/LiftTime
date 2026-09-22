@@ -53,7 +53,7 @@ export interface ExerciseDetailProps {
   onStopRest: () => void;
 }
 
-type ActionPanel = "none" | "history" | "instructions" | "notes";
+type ActionPanel = "none" | "instructions" | "notes";
 
 const getRestByGoal = (goal: WorkoutPreferences["trainingGoal"]) => {
   if (goal === "strength") {
@@ -235,42 +235,6 @@ export const ExerciseDetail = ({
   );
   const nextIncompleteSetId = activeExercise?.sets.find((set) => !set.completed)?.id ?? null;
 
-  const hasWeightOverride = activeExercise?.sets.some((set) => set.weightEdited) ?? false;
-  const suggestionDirection = useMemo<"up" | "down" | "hold">(() => {
-    if (!activeExercise) {
-      return "hold";
-    }
-
-    const upSet = activeExercise.sets.find((set) => set.suggestionDirection === "up");
-    if (upSet) {
-      return "up";
-    }
-
-    const downSet = activeExercise.sets.find((set) => set.suggestionDirection === "down");
-    if (downSet) {
-      return "down";
-    }
-
-    return "hold";
-  }, [activeExercise]);
-
-  const suggestionCardText = useMemo(() => {
-    if (hasWeightOverride || suggestionDirection === "hold") {
-      return null;
-    }
-
-    if (suggestionDirection === "down") {
-      return "Starting lighter based on your time off. Building back up.";
-    }
-
-    const targetWeight = activeExercise?.sets.find((set) => set.suggestionDirection === "up")?.weightLbs ?? null;
-    if (targetWeight) {
-      return `Last session: 3 x 10 at 135 lbs — try ${targetWeight} lbs today`;
-    }
-
-    return "Last session: 3 x 10 at 135 lbs — try 140 lbs today";
-  }, [activeExercise, hasWeightOverride, suggestionDirection]);
-
   const openPanel = (panel: ActionPanel) => {
     setActionPanel((previous) => (previous === panel ? "none" : panel));
   };
@@ -421,7 +385,6 @@ export const ExerciseDetail = ({
 
         <div className="mt-3 flex gap-2">
           {([
-            ["history", "HISTORY"],
             ["instructions", "INSTRUCTIONS"],
             ["notes", "NOTES"]
           ] as const).map(([panelKey, label]) => {
@@ -442,12 +405,6 @@ export const ExerciseDetail = ({
             );
           })}
         </div>
-
-        {actionPanel === "history" ? (
-          <div className="mt-2 rounded-[4px] border border-[#2e2e2e] bg-[#1c1c1c] p-3 font-data text-[13px] text-[#8a8478]">
-            Exercise history screen stub.
-          </div>
-        ) : null}
 
         {actionPanel === "instructions" ? (
           <div className="mt-2 rounded-[4px] border border-[#2e2e2e] bg-[#1c1c1c] p-3 font-data text-[13px] text-[#8a8478]">
@@ -546,15 +503,6 @@ export const ExerciseDetail = ({
       </div>
 
       <div className="px-3 pb-40 pt-3">
-        {suggestionCardText ? (
-          <div
-            className="mb-2 rounded-[4px] border border-[#c8922a] bg-[#2a1f0a] px-[6px] py-2 font-data text-[11px] text-[#8a8478]"
-            style={{ fontFamily: "DM Mono" }}
-          >
-            {suggestionCardText}
-          </div>
-        ) : null}
-
         <div className="mb-2.5 flex items-center justify-between">
           <span className="border-l-2 border-[#c8922a] pl-2 font-display text-[12px] font-medium uppercase tracking-[0.08em] text-[#4a4740]">
             Sets
@@ -584,7 +532,7 @@ export const ExerciseDetail = ({
             <div className="space-y-1">
               <p className="inline-flex items-center gap-2">
                 <span className="h-[6px] w-[6px] rounded-full bg-[#c8922a]" aria-hidden="true" />
-                <span>WARM-UP — set marked as warm-up, excluded from progression tracking</span>
+                <span>WARM-UP — set marked as warm-up</span>
               </p>
               <p className="inline-flex items-center gap-2">
                 <span className="h-[6px] w-[6px] rounded-full bg-[#8a8478]" aria-hidden="true" />
@@ -595,14 +543,6 @@ export const ExerciseDetail = ({
                 <span>FAILURE — taken to failure (no dot = working set)</span>
               </p>
             </div>
-
-            <p className="mb-2 uppercase tracking-[0.08em]">How Suggestions Work</p>
-            <p>
-              LiftTime tracks your last 2 sessions per exercise. If you consistently hit the top of your rep target,
-              it suggests a small weight increase next session.
-            </p>
-            <p className="mt-2">If you override a suggestion, your actual value is saved as real performance data.</p>
-            <p className="mt-2">↑ increase suggested · — hold · ↓ reduce</p>
           </div>
         ) : null}
 

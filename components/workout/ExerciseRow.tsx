@@ -8,14 +8,9 @@ export interface ExerciseRowProps {
   arrow: "↑" | "—" | "↓";
   onPress: () => void;
   onActionPress: () => void;
-  onDragStart?: () => void;
-  onDragEnd?: () => void;
-  onDragOver?: React.DragEventHandler<HTMLDivElement>;
-  onDrop?: React.DragEventHandler<HTMLDivElement>;
   rowState: "complete" | "current" | "notStarted";
   isEditMode: boolean;
   isSelected: boolean;
-  isDragging: boolean;
 }
 
 const arrowClassMap: Record<ExerciseRowProps["arrow"], string> = {
@@ -58,14 +53,9 @@ export const ExerciseRow = ({
   arrow,
   onPress,
   onActionPress,
-  onDragStart,
-  onDragEnd,
-  onDragOver,
-  onDrop,
   rowState,
   isEditMode,
-  isSelected,
-  isDragging
+  isSelected
 }: ExerciseRowProps) => {
   const classes = rowClassMap[rowState];
   const repsLabel = repsText.toLowerCase().includes("reps") ? repsText : `${repsText} reps`;
@@ -77,11 +67,9 @@ export const ExerciseRow = ({
           onPress();
         }
       }}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
       className={`relative flex min-h-[64px] w-full items-center border-b border-[#2e2e2e] px-3 py-[10px] text-left ${
         classes.bg
-      } ${classes.outer} ${isDragging ? "opacity-60" : ""}`}
+      } ${classes.outer}`}
     >
       {classes.rail ? <span className={`absolute left-0 top-0 h-full w-[3px] ${classes.rail}`} aria-hidden="true" /> : null}
 
@@ -124,27 +112,9 @@ export const ExerciseRow = ({
         >
           {isEditMode ? <span className="font-data text-[16px]">✓</span> : <TrashIcon />}
         </button>
-
-        {isEditMode ? (
-          <button
-            type="button"
-            draggable
-            onDragStart={(event) => {
-              if (event.dataTransfer) {
-                event.dataTransfer.effectAllowed = "move";
-              }
-              onDragStart?.();
-            }}
-            onDragEnd={() => onDragEnd?.()}
-            onClick={(event) => event.stopPropagation()}
-            className="inline-flex h-[22px] w-[22px] items-center justify-center font-data text-[18px] text-[#4a4740]"
-            aria-label="Drag exercise"
-          >
-            ⠿
-          </button>
-        ) : (
+        {!isEditMode ? (
           <span className="font-data text-[18px] text-[#4a4740]">›</span>
-        )}
+        ) : null}
       </span>
     </div>
   );

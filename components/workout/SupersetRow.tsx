@@ -14,13 +14,8 @@ export interface SupersetRowProps {
   rowState: "complete" | "current" | "notStarted";
   onPress: () => void;
   onActionPress: () => void;
-  onDragStart?: () => void;
-  onDragEnd?: () => void;
-  onDragOver?: React.DragEventHandler<HTMLDivElement>;
-  onDrop?: React.DragEventHandler<HTMLDivElement>;
   isEditMode: boolean;
   isSelected: boolean;
-  isDragging: boolean;
 }
 
 export interface ChainIconProps {
@@ -109,13 +104,8 @@ export const SupersetRow = ({
   rowState,
   onPress,
   onActionPress,
-  onDragStart,
-  onDragEnd,
-  onDragOver,
-  onDrop,
   isEditMode,
-  isSelected,
-  isDragging
+  isSelected
 }: SupersetRowProps) => {
   const classes = rowClassMap[rowState];
   return (
@@ -125,11 +115,9 @@ export const SupersetRow = ({
           onPress();
         }
       }}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
       className={`relative flex min-h-[80px] w-full items-center border-b border-[#2e2e2e] px-3 py-[10px] text-left ${
         classes.bg
-      } ${classes.outer} ${isDragging ? "opacity-60" : ""}`}
+      } ${classes.outer}`}
     >
       {classes.rail ? <span className={`absolute left-0 top-0 h-full w-[3px] ${classes.rail}`} aria-hidden="true" /> : null}
       <span className="mr-2 flex w-[42px] shrink-0 items-center justify-center self-stretch">
@@ -154,27 +142,9 @@ export const SupersetRow = ({
         >
           {isEditMode ? <span className="font-data text-[16px]">✓</span> : <TrashIcon />}
         </button>
-
-        {isEditMode ? (
-          <button
-            type="button"
-            draggable
-            onDragStart={(event) => {
-              if (event.dataTransfer) {
-                event.dataTransfer.effectAllowed = "move";
-              }
-              onDragStart?.();
-            }}
-            onDragEnd={() => onDragEnd?.()}
-            onClick={(event) => event.stopPropagation()}
-            className="inline-flex h-[22px] w-[22px] items-center justify-center font-data text-[18px] text-[#4a4740]"
-            aria-label="Drag superset"
-          >
-            ⠿
-          </button>
-        ) : (
+        {!isEditMode ? (
           <span className="font-data text-[18px] text-[#4a4740]">›</span>
-        )}
+        ) : null}
       </span>
     </div>
   );
