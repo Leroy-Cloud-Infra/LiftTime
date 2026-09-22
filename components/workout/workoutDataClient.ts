@@ -325,7 +325,7 @@ export const finishWorkoutSession = async (
   return parsed.data;
 };
 
-export const startWorkoutSession = async (): Promise<StartedWorkoutSessionResult> => {
+export const startWorkoutSession = async (templateId: string): Promise<StartedWorkoutSessionResult> => {
   const response = await fetch("/api/workout/mutate", {
     method: "POST",
     headers: {
@@ -333,7 +333,7 @@ export const startWorkoutSession = async (): Promise<StartedWorkoutSessionResult
     },
     body: JSON.stringify({
       action: "start_workout_session",
-      payload: {}
+      payload: { templateId }
     })
   });
 
