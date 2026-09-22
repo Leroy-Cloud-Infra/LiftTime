@@ -13,7 +13,6 @@ import {
   deleteSet as persistDeleteSet,
   deleteWorkoutExercises as persistDeleteWorkoutExercises,
   finishWorkoutSession as persistFinishWorkoutSession,
-  reorderWorkoutExercises as persistReorderWorkoutExercises,
   startWorkoutSession as persistStartWorkoutSession,
   updateSet as persistUpdateSet,
   type ActiveWorkoutBootstrapResult,
@@ -565,7 +564,6 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
   const [activeCatalogExerciseIds, setActiveCatalogExerciseIds] = useState<ReadonlySet<string>>(() => new Set());
   const [isEditMode, setIsEditMode] = useState(false);
   const [selectedExerciseIds, setSelectedExerciseIds] = useState<string[]>([]);
-  const [draggingRowKey, setDraggingRowKey] = useState<string | null>(null);
   const [editMessage, setEditMessage] = useState<string | null>(null);
   const [exerciseDeleteDialog, setExerciseDeleteDialog] = useState<{ exerciseIds: string[]; label: string } | null>(
     null
@@ -1091,80 +1089,6 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
     });
   };
 
-  const reorderInProgressRows = (sourceRowKey: string, targetRowKey: string) => {
-    if (sourceRowKey === targetRowKey) {
-      return;
-    }
-
-    const ordered = sortedExercises(session.exercises);
-    const prevInProgress = ordered.filter((exercise) => !isExerciseComplete(exercise));
-    const rows = buildGroupedRows(prevInProgress);
-    const sourceIndex = rows.findIndex((row) => getRowKey(row) === sourceRowKey);
-    const targetIndex = rows.findIndex((row) => getRowKey(row) === targetRowKey);
-    if (sourceIndex < 0 || targetIndex < 0) {
-      return;
-    }
-
-    const nextRows = [...rows];
-    const [moved] = nextRows.splice(sourceIndex, 1);
-    nextRows.splice(targetIndex, 0, moved);
-    const reorderedInProgressIds = nextRows.flatMap((row) => row.exerciseIds);
-
-    let inProgressIndex = 0;
-    const nextOrderIds = ordered.map((exercise) => {
-      if (isExerciseComplete(exercise)) {
-        return exercise.id;
-      }
-
-      const nextId = reorderedInProgressIds[inProgressIndex] ?? exercise.id;
-      inProgressIndex += 1;
-      return nextId;
-    });
-
-    const exerciseById = session.exercises.reduce<Record<string, WorkoutExercise>>((accumulator, exercise) => {
-      accumulator[exercise.id] = exercise;
-      return accumulator;
-    }, {});
-
-    const nextExercises: WorkoutExercise[] = [];
-    nextOrderIds.forEach((id, index) => {
-      const exercise = exerciseById[id];
-      if (!exercise) {
-        return;
-      }
-
-      nextExercises.push({
-        ...exercise,
-        order: index + 1
-      });
-    });
-
-    if (nextExercises.length !== session.exercises.length) {
-      return;
-    }
-
-    setSession((previous) => ({
-      ...previous,
-      exercises: nextExercises
-    }));
-
-    void (async () => {
-      try {
-        await persistReorderWorkoutExercises({
-          sessionId: session.id,
-          orderedWorkoutExerciseIds: nextExercises
-            .slice()
-            .sort((left, right) => left.order - right.order)
-            .map((exercise) => exercise.id)
-        });
-        setPersistenceError(null);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to reorder exercises.";
-        setPersistenceError(message);
-      }
-    })();
-  };
-
   const onPressDeleteSelected = () => {
     if (selectedExerciseIds.length === 0) {
       setEditMessage("Tap ✓ on exercises to select");
@@ -1333,7 +1257,6 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
                       rowState="complete"
                       isEditMode={false}
                       isSelected={false}
-                      isDragging={false}
                       onPress={() =>
                         setDetailTarget({
                           type: "single",
@@ -1372,7 +1295,6 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
                     rowState="complete"
                     isEditMode={false}
                     isSelected={false}
-                    isDragging={false}
                     onPress={() =>
                       setDetailTarget({
                         type: "superset",
@@ -1412,7 +1334,6 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
                   onClick={() => {
                     setIsEditMode(false);
                     setSelectedExerciseIds([]);
-                    setDraggingRowKey(null);
                     setEditMessage(null);
                   }}
                   className="font-microgramma font-display text-[12px] font-medium uppercase tracking-[0.08em] text-[#4a9e6b]"
@@ -1461,7 +1382,6 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
                     rowState={getExerciseRowState(exercise)}
                     isEditMode={isEditMode}
                     isSelected={rowSelected}
-                    isDragging={draggingRowKey === rowKey}
                     onPress={() =>
                       setDetailTarget({
                         type: "single",
@@ -1476,24 +1396,6 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
                       }
 
                       openExerciseDeleteDialog([exercise.id]);
-                    }}
-                    onDragStart={() => setDraggingRowKey(rowKey)}
-                    onDragEnd={() => setDraggingRowKey(null)}
-                    onDragOver={(event) => {
-                      if (!isEditMode) {
-                        return;
-                      }
-
-                      event.preventDefault();
-                    }}
-                    onDrop={(event) => {
-                      if (!isEditMode || !draggingRowKey) {
-                        return;
-                      }
-
-                      event.preventDefault();
-                      reorderInProgressRows(draggingRowKey, rowKey);
-                      setDraggingRowKey(null);
                     }}
                   />
                 );
@@ -1525,7 +1427,6 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
                   rowState={getSupersetRowState(first, second)}
                   isEditMode={isEditMode}
                   isSelected={rowSelected}
-                  isDragging={draggingRowKey === rowKey}
                   onPress={() =>
                     setDetailTarget({
                       type: "superset",
@@ -1540,24 +1441,6 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
                     }
 
                     openExerciseDeleteDialog([first.id, second.id]);
-                  }}
-                  onDragStart={() => setDraggingRowKey(rowKey)}
-                  onDragEnd={() => setDraggingRowKey(null)}
-                  onDragOver={(event) => {
-                    if (!isEditMode) {
-                      return;
-                    }
-
-                    event.preventDefault();
-                  }}
-                  onDrop={(event) => {
-                    if (!isEditMode || !draggingRowKey) {
-                      return;
-                    }
-
-                    event.preventDefault();
-                    reorderInProgressRows(draggingRowKey, rowKey);
-                    setDraggingRowKey(null);
                   }}
                 />
               );
