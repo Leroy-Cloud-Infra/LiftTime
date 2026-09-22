@@ -57,40 +57,9 @@ export const formatWorkoutForClipboard = (
 };
 
 export const copyWorkoutToClipboard = async (text: string): Promise<void> => {
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch {
-      // Fall through to the legacy compatibility path.
-    }
-  }
-
-  if (typeof document === "undefined") {
+  if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
     throw new Error("CLIPBOARD_UNAVAILABLE");
   }
 
-  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.setAttribute("aria-hidden", "true");
-  textarea.style.position = "fixed";
-  textarea.style.top = "0";
-  textarea.style.left = "-9999px";
-  textarea.style.opacity = "0";
-  textarea.style.pointerEvents = "none";
-
-  document.body.appendChild(textarea);
-
-  try {
-    textarea.focus();
-    textarea.select();
-    if (!document.execCommand("copy")) {
-      throw new Error("CLIPBOARD_COPY_FAILED");
-    }
-  } finally {
-    textarea.remove();
-    previousFocus?.focus();
-  }
+  await navigator.clipboard.writeText(text);
 };

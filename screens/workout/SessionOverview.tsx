@@ -557,6 +557,7 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
   const [finishedWorkoutForClipboard, setFinishedWorkoutForClipboard] = useState<WorkoutSession | null>(null);
   const [isCopyingWorkout, setIsCopyingWorkout] = useState(false);
   const [copyWorkoutMessage, setCopyWorkoutMessage] = useState<string | null>(null);
+  const [copyWorkoutText, setCopyWorkoutText] = useState<string | null>(null);
   const [isFinishingSession, setIsFinishingSession] = useState(false);
   const [finishSessionError, setFinishSessionError] = useState<string | null>(null);
   const [isStartingSession, setIsStartingSession] = useState(false);
@@ -936,6 +937,7 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
       setFinishedSessionSummary(summary);
       setFinishedWorkoutForClipboard(workoutSnapshot);
       setCopyWorkoutMessage(null);
+      setCopyWorkoutText(null);
       setShowFinishConfirm(false);
       setDetailTarget(null);
       setStubScreen("session-summary");
@@ -961,12 +963,15 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
       startedAt: finishedSessionSummary.session.startedAt,
       endedAt: finishedSessionSummary.session.endedAt
     };
+    const formattedWorkoutText = formatWorkoutForClipboard(finishedWorkoutForClipboard, clipboardSummary);
 
     try {
-      await copyWorkoutToClipboard(formatWorkoutForClipboard(finishedWorkoutForClipboard, clipboardSummary));
+      await copyWorkoutToClipboard(formattedWorkoutText);
       setCopyWorkoutMessage("COPIED");
+      setCopyWorkoutText(null);
     } catch {
-      setCopyWorkoutMessage("COPY FAILED");
+      setCopyWorkoutMessage(null);
+      setCopyWorkoutText(formattedWorkoutText);
     } finally {
       setIsCopyingWorkout(false);
     }
@@ -1694,6 +1699,7 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
               setFinishedSessionSummary(null);
               setFinishedWorkoutForClipboard(null);
               setCopyWorkoutMessage(null);
+              setCopyWorkoutText(null);
               void refreshSession(true);
             }}
             className="mb-3 inline-flex items-center gap-2 rounded-[3px] border-2 border-[#2e2e2e] px-[14px] py-[6px] font-display text-[14px] font-bold uppercase tracking-[0.08em] text-[#8a8478] hover:border-[#c8922a] hover:text-[#c8922a]"
@@ -1734,9 +1740,17 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
                   {isCopyingWorkout ? "Copying..." : "Copy Workout"}
                 </button>
                 {copyWorkoutMessage ? (
-                  <p className={copyWorkoutMessage === "COPIED" ? "mt-2 font-display text-[12px] uppercase text-[#6f9f68]" : "mt-2 font-display text-[12px] uppercase text-[#b84040]"}>
+                  <p className="mt-2 font-display text-[12px] uppercase text-[#6f9f68]">
                     {copyWorkoutMessage}
                   </p>
+                ) : null}
+                {copyWorkoutText ? (
+                  <pre
+                    aria-label="Formatted workout text"
+                    className="mt-3 max-h-[45vh] overflow-y-auto whitespace-pre-wrap break-words rounded-[3px] border border-[#2e2e2e] bg-[#0d0d0d] p-3 font-data text-[12px] leading-[1.45] text-[#e8e4dc] select-text"
+                  >
+                    {copyWorkoutText}
+                  </pre>
                 ) : null}
               </div>
             ) : (
