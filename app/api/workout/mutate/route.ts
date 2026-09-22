@@ -67,7 +67,9 @@ interface FinishWorkoutSessionPayload {
   sessionId: string;
 }
 
-type StartWorkoutSessionPayload = Record<string, never>;
+interface StartWorkoutSessionPayload {
+  templateId: string;
+}
 
 interface MutationRequestBody {
   action?: unknown;
@@ -142,8 +144,8 @@ interface WorkoutExerciseRpcRow {
 }
 
 interface StartWorkoutSessionRpcRow {
-  outcome: "created" | "already_active";
-  session_id: string;
+  outcome: "created" | "already_active" | "template_not_found" | "template_inactive" | "template_invalid";
+  session_id: string | null;
 }
 
 interface WorkoutSetApiRow {
@@ -927,18 +929,19 @@ const addWorkoutExerciseWithDefaults = async (
   return result;
 };
 
-const startPushDayWorkoutSession = async (
+const startTemplateWorkoutSession = async (
   supabaseUrl: string,
   serviceRoleKey: string,
-  principalId: string
+  principalId: string,
+  templateId: string
 ): Promise<StartWorkoutSessionRpcRow> => {
-  const response = await fetch(buildRestUrl(supabaseUrl, "rpc/start_push_day_workout_session"), {
+  const response = await fetch(buildRestUrl(supabaseUrl, "rpc/start_workout_session_from_template"), {
     method: "POST",
     headers: {
       ...createServiceHeaders(serviceRoleKey),
       Prefer: "return=representation"
     },
-    body: JSON.stringify({ p_user_id: principalId }),
+    body: JSON.stringify({ p_user_id: principalId, p_template_id: templateId }),
     cache: "no-store"
   });
 
@@ -948,7 +951,11 @@ const startPushDayWorkoutSession = async (
 
   const rows = (await response.json()) as StartWorkoutSessionRpcRow[];
   const result = rows[0];
-  if (!result || !result.session_id || (result.outcome !== "created" && result.outcome !== "already_active")) {
+  if (
+    !result ||
+    !["created", "already_active", "template_not_found", "template_inactive", "template_invalid"].includes(result.outcome) ||
+    ((result.outcome === "created" || result.outcome === "already_active") && !result.session_id)
+  ) {
     throw new Error("WORKOUT_SESSION_START_RPC_INVALID_RESPONSE");
   }
 
@@ -1241,11 +1248,11 @@ const parseFinishWorkoutSessionPayload = (payload: unknown): FinishWorkoutSessio
 };
 
 const parseStartWorkoutSessionPayload = (payload: unknown): StartWorkoutSessionPayload | null => {
-  if (payload === undefined) {
-    return {};
+  if (!isObject(payload) || !isNonBlankString(payload.templateId) || !UUID_PATTERN.test(payload.templateId)) {
+    return null;
   }
 
-  return isObject(payload) && Object.keys(payload).length === 0 ? {} : null;
+  return { templateId: payload.templateId.trim() };
 };
 
 const parseMutationRequest = (body: MutationRequestBody): ParsedMutationRequest | null => {
@@ -1583,11 +1590,22 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
     case "start_workout_session":
       try {
-        const result = await startPushDayWorkoutSession(
+        const result = await startTemplateWorkoutSession(
           env.supabaseUrl,
           env.supabaseServiceRoleKey,
-          sessionCheck.payload.sub
+          sessionCheck.payload.sub,
+          parsedRequest.payload.templateId
         );
+
+        if (result.outcome === "template_not_found") {
+          return NextResponse.json({ ok: false, error: "TEMPLATE_NOT_FOUND" }, { status: 404 });
+        }
+        if (result.outcome === "template_inactive") {
+          return NextResponse.json({ ok: false, error: "TEMPLATE_INACTIVE" }, { status: 409 });
+        }
+        if (result.outcome === "template_invalid") {
+          return NextResponse.json({ ok: false, error: "TEMPLATE_INVALID" }, { status: 409 });
+        }
 
         return NextResponse.json({
           ok: true,

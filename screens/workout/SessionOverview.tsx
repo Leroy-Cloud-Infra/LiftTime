@@ -7,6 +7,7 @@ import { copyWorkoutToClipboard, formatWorkoutForClipboard, type ClipboardWorkou
 import { ExerciseRow } from "@/components/workout/ExerciseRow";
 import { SupersetRow } from "@/components/workout/SupersetRow";
 import { TimerStrip } from "@/components/workout/TimerStrip";
+import { PUSH_DAY_TEMPLATE_ID } from "@/components/workout/workoutTemplateIds";
 import {
   addSet as persistAddSet,
   completeSet as persistCompleteSet,
@@ -984,7 +985,7 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
     setStartSessionError(null);
 
     try {
-      await persistStartWorkoutSession();
+      await persistStartWorkoutSession(PUSH_DAY_TEMPLATE_ID);
       const refreshed = await refreshSession(false);
       if (!refreshed) {
         throw new Error("WORKOUT_START_RECONCILIATION_FAILED");
