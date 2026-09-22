@@ -57,7 +57,7 @@ export const formatWorkoutForClipboard = (
 };
 
 export const copyWorkoutToClipboard = async (text: string): Promise<void> => {
-  if (!navigator.clipboard?.writeText) {
+  if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
     throw new Error("CLIPBOARD_UNAVAILABLE");
   }
 
