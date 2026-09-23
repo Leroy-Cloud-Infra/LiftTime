@@ -7,6 +7,7 @@ export interface SetTypeDropdownProps {
   showTags: boolean;
   onChange: (value: SetType) => void;
   onDelete: () => void;
+  disabled?: boolean;
   triggerContent?: React.ReactNode;
   triggerClassName?: string;
 }
@@ -32,6 +33,7 @@ export const SetTypeDropdown = ({
   showTags,
   onChange,
   onDelete: _onDelete,
+  disabled = false,
   triggerContent,
   triggerClassName
 }: SetTypeDropdownProps) => {
@@ -64,7 +66,8 @@ export const SetTypeDropdown = ({
       <button
         type="button"
         onClick={() => setOpen((previous) => !previous)}
-        className={triggerClassName ? `${triggerBaseClass} ${triggerClassName}` : triggerBaseClass}
+        disabled={disabled}
+        className={`${triggerClassName ? `${triggerBaseClass} ${triggerClassName}` : triggerBaseClass} disabled:cursor-not-allowed disabled:opacity-60`}
       >
         {showTags ? currentLabel : (triggerContent ?? null)}
       </button>
@@ -75,11 +78,12 @@ export const SetTypeDropdown = ({
             <button
               key={option}
               type="button"
+              disabled={disabled}
               onClick={() => {
                 onChange(option);
                 setOpen(false);
               }}
-              className="flex h-7 w-full items-center gap-2 px-2 text-left font-display text-[10px] font-medium uppercase tracking-[0.08em] text-[#8a8478]"
+              className="flex h-7 w-full items-center gap-2 px-2 text-left font-display text-[10px] font-medium uppercase tracking-[0.08em] text-[#8a8478] disabled:cursor-not-allowed disabled:opacity-60"
             >
               <span className="inline-flex h-[10px] w-[10px] items-center justify-center border border-[#8a8478] text-[8px] leading-none">
                 {option === value ? "●" : ""}

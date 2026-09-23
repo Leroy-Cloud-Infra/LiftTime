@@ -12,7 +12,7 @@ export interface SetRowProps {
   preferredUnit: PreferredUnit;
   onChangeWeight: (weightLbs: number | null, edited: boolean) => void;
   onChangeReps: (reps: number | null) => void;
-  onChangeSetType: (setType: SetType) => void;
+  onChangeSetType: (setType: SetType) => Promise<void>;
   onChangeRir: (rir: number | null) => void;
   onCommitEdit: (payload: { reps: number | null; weightLbs: number | null; setType: SetType; rir: number | null }) => Promise<void>;
   onDelete: () => void;
@@ -123,6 +123,8 @@ export const SetRow = ({
   const [isRirPickerOpen, setIsRirPickerOpen] = useState(false);
   const [isSavingRir, setIsSavingRir] = useState(false);
   const [rirSaveError, setRirSaveError] = useState<string | null>(null);
+  const [isSavingSetType, setIsSavingSetType] = useState(false);
+  const [setTypeSaveError, setSetTypeSaveError] = useState<string | null>(null);
   const commitCurrentValues = () => {
     void onCommitEdit({
       reps: parseIntegerValue(repsInputRef.current?.value ?? repsValue),
@@ -159,6 +161,21 @@ export const SetRow = ({
       setIsSavingRir(false);
     }
   };
+  const selectSetType = async (setType: SetType) => {
+    if (isSavingSetType || setType === set.setType) {
+      return;
+    }
+
+    setSetTypeSaveError(null);
+    setIsSavingSetType(true);
+    try {
+      await onChangeSetType(setType);
+    } catch {
+      setSetTypeSaveError("NOT SAVED");
+    } finally {
+      setIsSavingSetType(false);
+    }
+  };
   const rowStateClass = set.completed
     ? "bg-[#101010]"
     : isNextIncomplete
@@ -176,8 +193,11 @@ export const SetRow = ({
     <SetTypeDropdown
       value={set.setType}
       showTags={false}
-      onChange={onChangeSetType}
+      onChange={(setType) => {
+        void selectSetType(setType);
+      }}
       onDelete={onDelete}
+      disabled={isSavingSetType}
       triggerClassName="mr-2 shrink-0"
       triggerContent={
         <span className="inline-flex w-[38px] items-center justify-start">
@@ -265,8 +285,11 @@ export const SetRow = ({
             <SetTypeDropdown
               value={set.setType}
               showTags
-              onChange={onChangeSetType}
+              onChange={(setType) => {
+                void selectSetType(setType);
+              }}
               onDelete={onDelete}
+              disabled={isSavingSetType}
             />
           </div>
         ) : null}
@@ -331,6 +354,12 @@ export const SetRow = ({
             </p>
           ) : null}
         </div>
+      ) : null}
+
+      {setTypeSaveError ? (
+        <p className="px-3 pb-2 font-data text-[11px] text-[#b84040]" role="alert">
+          {setTypeSaveError}
+        </p>
       ) : null}
     </div>
   );

@@ -23,6 +23,9 @@ export interface PersistSetPayload {
   reps: number | null;
   rir: number | null;
   completed: true;
+}
+
+export interface PersistSetResult {
   completedAt: string;
 }
 
@@ -36,7 +39,7 @@ export interface ExerciseDetailProps {
   onClose: () => void;
   onAdvanceExercise: () => void;
   onFinishWorkout: () => Promise<void>;
-  onSaveSet: (payload: PersistSetPayload) => Promise<void>;
+  onSaveSet: (payload: PersistSetPayload) => Promise<PersistSetResult>;
   onUpdateSet: (exerciseId: string, setId: string, patch: Partial<ExerciseSet>) => void;
   onCommitSetEdit: (
     exerciseId: string,
@@ -254,10 +257,9 @@ export const ExerciseDetail = ({
       return false;
     }
 
-    const completedAt = new Date().toISOString();
-
+    let completedAt: string;
     try {
-      await onSaveSet({
+      const result = await onSaveSet({
         workoutExerciseId: activeExercise.id,
         setId: pendingSet.id,
         setNumber: pendingSet.setNumber,
@@ -265,9 +267,9 @@ export const ExerciseDetail = ({
         weightLbs: pendingSet.weightLbs,
         reps: pendingSet.reps,
         rir: pendingSet.rir,
-        completed: true,
-        completedAt
+        completed: true
       });
+      completedAt = result.completedAt;
     } catch {
       setCompletionError("Unable to log set right now. Please try again.");
       return false;
@@ -571,10 +573,20 @@ export const ExerciseDetail = ({
                   }
                   onUpdateSet(activeExercise.id, setRow.id, { reps });
                 }}
-                onChangeSetType={(setType) => {
+                onChangeSetType={async (setType) => {
                   if (completionError) {
                     setCompletionError(null);
                   }
+
+                  if (setRow.completed) {
+                    await onCommitSetEdit(activeExercise.id, setRow.id, {
+                      reps: setRow.reps,
+                      weightLbs: setRow.weightLbs,
+                      setType,
+                      rir: setRow.rir
+                    });
+                  }
+
                   onUpdateSet(activeExercise.id, setRow.id, { setType });
                 }}
                 onChangeRir={(rir) => {

@@ -908,15 +908,14 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
   };
 
   const saveSet = async (payload: PersistSetPayload) => {
-    await persistCompleteSet({
+    return persistCompleteSet({
       workoutExerciseId: payload.workoutExerciseId,
       setId: payload.setId,
       setNumber: payload.setNumber,
       setType: payload.setType,
       weightLbs: payload.weightLbs,
       reps: payload.reps,
-      rir: payload.rir,
-      completedAt: payload.completedAt
+      rir: payload.rir
     });
   };
 
@@ -1087,6 +1086,14 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
 
   const removeExercisesById = (ids: string[]) => {
     const toRemove = new Set(ids);
+    const containsCompletedSets = session.exercises.some(
+      (exercise) => toRemove.has(exercise.id) && exercise.sets.some((set) => set.completed)
+    );
+    if (containsCompletedSets) {
+      setPersistenceError("Exercises with completed sets cannot be removed from an active workout.");
+      return;
+    }
+
     const previousSession = session;
     const removedIds = session.exercises.filter((exercise) => toRemove.has(exercise.id)).map((exercise) => exercise.id);
 
@@ -1114,7 +1121,12 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
         setPersistenceError(null);
       } catch (error) {
         setSession(previousSession);
-        const message = error instanceof Error ? error.message : "Failed to delete exercise.";
+        const message =
+          error instanceof Error && error.message === "EXERCISE_HAS_COMPLETED_SETS"
+            ? "Exercises with completed sets cannot be removed from an active workout."
+            : error instanceof Error
+              ? error.message
+              : "Failed to delete exercise.";
         setPersistenceError(message);
       }
     })();
@@ -1167,14 +1179,7 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
       onAdvanceExercise={() => undefined}
       onFinishWorkout={finishWorkoutSession}
       isFinishingWorkout={isFinishingSession}
-      onSaveSet={async (payload) => {
-        await saveSet(payload);
-        updateSet(payload.workoutExerciseId, payload.setId, {
-          rir: payload.rir,
-          completed: true,
-          completedAt: payload.completedAt
-        });
-      }}
+      onSaveSet={saveSet}
       onUpdateSet={updateSet}
       onCommitSetEdit={commitSetEdit}
       onDeleteSet={deleteSet}
