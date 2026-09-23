@@ -63,6 +63,9 @@ export interface CompleteSetParams {
   weightLbs: number | null;
   reps: number | null;
   rir: number | null;
+}
+
+export interface CompletedSetResult {
   completedAt: string;
 }
 
@@ -117,7 +120,7 @@ const uniqueStrings = (values: string[]): string[] => {
   return [...new Set(values)];
 };
 
-export const completeSet = async (params: CompleteSetParams): Promise<void> => {
+export const completeSet = async (params: CompleteSetParams): Promise<CompletedSetResult> => {
   if (params.reps === null || params.reps <= 0) {
     throw new Error("INVALID_COMPLETED_SET_REPS");
   }
@@ -136,22 +139,28 @@ export const completeSet = async (params: CompleteSetParams): Promise<void> => {
         setType: params.setType,
         weightLbs: params.weightLbs,
         reps: params.reps,
-        rir: params.rir,
-        completedAt: params.completedAt
+        rir: params.rir
       }
     })
   });
 
-  let parsed: { ok?: boolean; error?: string } | null = null;
+  let parsed: { ok?: boolean; error?: string; data?: { completedAt?: string | null } } | null = null;
   try {
-    parsed = (await response.json()) as { ok?: boolean; error?: string };
+    parsed = (await response.json()) as {
+      ok?: boolean;
+      error?: string;
+      data?: { completedAt?: string | null };
+    };
   } catch {
     parsed = null;
   }
 
-  if (!response.ok || parsed?.ok !== true) {
+  const completedAt = parsed?.data?.completedAt;
+  if (!response.ok || parsed?.ok !== true || typeof completedAt !== "string" || completedAt.length === 0) {
     throw new Error(parsed?.error ?? "MUTATION_FAILED");
   }
+
+  return { completedAt };
 };
 
 export const addSet = async (params: AddSetParams): Promise<DbWorkoutSet> => {

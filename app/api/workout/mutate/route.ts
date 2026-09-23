@@ -29,7 +29,6 @@ interface CompleteSetPayload {
   weightLbs: number | null;
   reps: number | null;
   rir: number | null;
-  completedAt: string;
 }
 
 interface AddSetPayload {
@@ -96,11 +95,6 @@ interface WorkoutExerciseRow {
   id: string;
 }
 
-interface WorkoutExerciseOrderRow {
-  id: string;
-  order_index: number;
-}
-
 interface WorkoutSetRow {
   id: string;
 }
@@ -108,14 +102,10 @@ interface WorkoutSetRow {
 interface WorkoutSetStateRow {
   id: string;
   completed: boolean;
+  completed_at: string | null;
 }
 
 interface WorkoutSetNumberRow {
-  set_number: number;
-}
-
-interface WorkoutSetOrderRow {
-  id: string;
   set_number: number;
 }
 
@@ -130,6 +120,21 @@ interface WorkoutSetRecord {
   completed: boolean;
   completed_at: string | null;
   created_at: string;
+}
+
+interface DeleteWorkoutSetRpcRow {
+  outcome: "deleted" | "not_found_or_forbidden" | "session_not_active" | "set_not_found";
+}
+
+interface DeleteWorkoutExercisesRpcRow {
+  outcome:
+    | "deleted"
+    | "invalid_input"
+    | "not_found_or_forbidden"
+    | "session_not_active"
+    | "exercise_not_found"
+    | "exercise_has_completed_sets";
+  deleted_workout_exercise_ids: string[];
 }
 
 interface WorkoutExerciseRpcRow {
@@ -296,10 +301,6 @@ const parseSupabaseError = async (response: Response): Promise<SupabaseErrorResp
   } catch {
     return null;
   }
-};
-
-const isValidIsoDateTime = (value: string): boolean => {
-  return !Number.isNaN(Date.parse(value));
 };
 
 const loadWorkoutExerciseOwnership = async (
@@ -477,34 +478,6 @@ const sessionNotActiveResponse = () => {
   return NextResponse.json({ ok: false, error: "SESSION_NOT_ACTIVE" }, { status: 409 });
 };
 
-const checkWorkoutSetExists = async (
-  supabaseUrl: string,
-  serviceRoleKey: string,
-  workoutExerciseId: string,
-  setId: string
-): Promise<boolean> => {
-  const response = await fetch(
-    buildRestUrl(supabaseUrl, "workout_sets", {
-      select: "id",
-      id: `eq.${setId}`,
-      workout_exercise_id: `eq.${workoutExerciseId}`,
-      limit: "1"
-    }),
-    {
-      method: "GET",
-      headers: createServiceHeaders(serviceRoleKey, false),
-      cache: "no-store"
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error("WORKOUT_SET_LOOKUP_FAILED");
-  }
-
-  const rows = (await response.json()) as WorkoutSetRow[];
-  return Boolean(rows[0]);
-};
-
 const loadWorkoutSetState = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -513,7 +486,7 @@ const loadWorkoutSetState = async (
 ): Promise<WorkoutSetStateRow | null> => {
   const response = await fetch(
     buildRestUrl(supabaseUrl, "workout_sets", {
-      select: "id,completed",
+      select: "id,completed,completed_at",
       id: `eq.${setId}`,
       workout_exercise_id: `eq.${workoutExerciseId}`,
       limit: "1"
@@ -537,7 +510,7 @@ const updateCompletedSet = async (
   supabaseUrl: string,
   serviceRoleKey: string,
   payload: CompleteSetPayload
-): Promise<boolean> => {
+): Promise<WorkoutSetRecord | null> => {
   const response = await fetch(
     buildRestUrl(supabaseUrl, "workout_sets", {
       id: `eq.${payload.setId}`,
@@ -556,7 +529,7 @@ const updateCompletedSet = async (
         reps: payload.reps,
         rir: payload.rir,
         completed: true,
-        completed_at: payload.completedAt
+        completed_at: new Date().toISOString()
       }),
       cache: "no-store"
     }
@@ -565,14 +538,14 @@ const updateCompletedSet = async (
   if (!response.ok) {
     const maybeError = await parseSupabaseError(response);
     if (response.status === 404 || maybeError?.code === "PGRST116") {
-      return false;
+      return null;
     }
 
     throw new Error("WORKOUT_SET_UPDATE_FAILED");
   }
 
-  const rows = (await response.json()) as WorkoutSetRow[];
-  return Boolean(rows[0]);
+  const rows = (await response.json()) as WorkoutSetRecord[];
+  return rows[0] ?? null;
 };
 
 const fetchHighestSetNumber = async (
@@ -678,222 +651,70 @@ const updateSetValues = async (
   return Boolean(rows[0]);
 };
 
-const deleteSetById = async (
+const deleteWorkoutSetAndCompact = async (
   supabaseUrl: string,
   serviceRoleKey: string,
+  principalId: string,
   payload: DeleteSetPayload
-): Promise<boolean> => {
-  const response = await fetch(
-    buildRestUrl(supabaseUrl, "workout_sets", {
-      id: `eq.${payload.setId}`,
-      workout_exercise_id: `eq.${payload.workoutExerciseId}`
+): Promise<DeleteWorkoutSetRpcRow> => {
+  const response = await fetch(buildRestUrl(supabaseUrl, "rpc/delete_workout_set_and_compact"), {
+    method: "POST",
+    headers: {
+      ...createServiceHeaders(serviceRoleKey),
+      Prefer: "return=representation"
+    },
+    body: JSON.stringify({
+      p_user_id: principalId,
+      p_workout_exercise_id: payload.workoutExerciseId,
+      p_set_id: payload.setId
     }),
-    {
-      method: "DELETE",
-      headers: {
-        ...createServiceHeaders(serviceRoleKey),
-        Prefer: "return=representation"
-      },
-      cache: "no-store"
-    }
-  );
+    cache: "no-store"
+  });
 
   if (!response.ok) {
-    throw new Error("WORKOUT_SET_DELETE_FAILED");
+    throw new Error("WORKOUT_SET_DELETE_RPC_FAILED");
   }
 
-  const rows = (await response.json()) as WorkoutSetRow[];
-  return Boolean(rows[0]);
+  const rows = (await response.json()) as DeleteWorkoutSetRpcRow[];
+  const result = rows[0];
+  if (!result) {
+    throw new Error("WORKOUT_SET_DELETE_RPC_EMPTY");
+  }
+
+  return result;
 };
 
-const fetchSetOrderRows = async (
+const deleteWorkoutExercisesAndCompact = async (
   supabaseUrl: string,
   serviceRoleKey: string,
-  workoutExerciseId: string
-): Promise<WorkoutSetOrderRow[]> => {
-  const response = await fetch(
-    buildRestUrl(supabaseUrl, "workout_sets", {
-      select: "id,set_number",
-      workout_exercise_id: `eq.${workoutExerciseId}`,
-      order: "set_number.asc"
+  principalId: string,
+  payload: DeleteWorkoutExercisesPayload
+): Promise<DeleteWorkoutExercisesRpcRow> => {
+  const response = await fetch(buildRestUrl(supabaseUrl, "rpc/delete_workout_exercises_and_compact"), {
+    method: "POST",
+    headers: {
+      ...createServiceHeaders(serviceRoleKey),
+      Prefer: "return=representation"
+    },
+    body: JSON.stringify({
+      p_user_id: principalId,
+      p_session_id: payload.sessionId,
+      p_workout_exercise_ids: payload.workoutExerciseIds
     }),
-    {
-      method: "GET",
-      headers: createServiceHeaders(serviceRoleKey, false),
-      cache: "no-store"
-    }
-  );
+    cache: "no-store"
+  });
 
   if (!response.ok) {
-    throw new Error("WORKOUT_SET_ORDER_FETCH_FAILED");
+    throw new Error("WORKOUT_EXERCISE_DELETE_RPC_FAILED");
   }
 
-  return (await response.json()) as WorkoutSetOrderRow[];
-};
-
-const updateSetNumber = async (
-  supabaseUrl: string,
-  serviceRoleKey: string,
-  workoutExerciseId: string,
-  setId: string,
-  setNumber: number
-): Promise<void> => {
-  const response = await fetch(
-    buildRestUrl(supabaseUrl, "workout_sets", {
-      id: `eq.${setId}`,
-      workout_exercise_id: `eq.${workoutExerciseId}`
-    }),
-    {
-      method: "PATCH",
-      headers: createServiceHeaders(serviceRoleKey),
-      body: JSON.stringify({
-        set_number: setNumber
-      }),
-      cache: "no-store"
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error("WORKOUT_SET_RENUMBER_FAILED");
-  }
-};
-
-const renumberSetsDense = async (
-  supabaseUrl: string,
-  serviceRoleKey: string,
-  workoutExerciseId: string
-): Promise<void> => {
-  const rows = await fetchSetOrderRows(supabaseUrl, serviceRoleKey, workoutExerciseId);
-  for (let index = 0; index < rows.length; index += 1) {
-    const expected = index + 1;
-    if (rows[index].set_number === expected) {
-      continue;
-    }
-
-    await updateSetNumber(supabaseUrl, serviceRoleKey, workoutExerciseId, rows[index].id, expected);
-  }
-};
-
-const fetchSessionWorkoutExerciseIds = async (
-  supabaseUrl: string,
-  serviceRoleKey: string,
-  sessionId: string,
-  workoutExerciseIds: string[]
-): Promise<string[]> => {
-  const response = await fetch(
-    buildRestUrl(supabaseUrl, "workout_exercises", {
-      select: "id",
-      session_id: `eq.${sessionId}`,
-      id: buildInFilter(workoutExerciseIds)
-    }),
-    {
-      method: "GET",
-      headers: createServiceHeaders(serviceRoleKey, false),
-      cache: "no-store"
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error("WORKOUT_EXERCISE_FILTER_LOOKUP_FAILED");
+  const rows = (await response.json()) as DeleteWorkoutExercisesRpcRow[];
+  const result = rows[0];
+  if (!result) {
+    throw new Error("WORKOUT_EXERCISE_DELETE_RPC_EMPTY");
   }
 
-  const rows = (await response.json()) as WorkoutExerciseRow[];
-  return rows.map((row) => row.id);
-};
-
-const deleteSessionWorkoutExercises = async (
-  supabaseUrl: string,
-  serviceRoleKey: string,
-  sessionId: string,
-  workoutExerciseIds: string[]
-): Promise<void> => {
-  if (workoutExerciseIds.length === 0) {
-    return;
-  }
-
-  const response = await fetch(
-    buildRestUrl(supabaseUrl, "workout_exercises", {
-      session_id: `eq.${sessionId}`,
-      id: buildInFilter(workoutExerciseIds)
-    }),
-    {
-      method: "DELETE",
-      headers: createServiceHeaders(serviceRoleKey, false),
-      cache: "no-store"
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error("WORKOUT_EXERCISE_DELETE_FAILED");
-  }
-};
-
-const fetchSessionExerciseOrderRows = async (
-  supabaseUrl: string,
-  serviceRoleKey: string,
-  sessionId: string
-): Promise<WorkoutExerciseOrderRow[]> => {
-  const response = await fetch(
-    buildRestUrl(supabaseUrl, "workout_exercises", {
-      select: "id,order_index",
-      session_id: `eq.${sessionId}`,
-      order: "order_index.asc"
-    }),
-    {
-      method: "GET",
-      headers: createServiceHeaders(serviceRoleKey, false),
-      cache: "no-store"
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error("WORKOUT_EXERCISE_ORDER_FETCH_FAILED");
-  }
-
-  return (await response.json()) as WorkoutExerciseOrderRow[];
-};
-
-const updateWorkoutExerciseOrderIndex = async (
-  supabaseUrl: string,
-  serviceRoleKey: string,
-  sessionId: string,
-  workoutExerciseId: string,
-  orderIndex: number
-): Promise<void> => {
-  const response = await fetch(
-    buildRestUrl(supabaseUrl, "workout_exercises", {
-      id: `eq.${workoutExerciseId}`,
-      session_id: `eq.${sessionId}`
-    }),
-    {
-      method: "PATCH",
-      headers: createServiceHeaders(serviceRoleKey),
-      body: JSON.stringify({
-        order_index: orderIndex
-      }),
-      cache: "no-store"
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error("WORKOUT_EXERCISE_RENUMBER_FAILED");
-  }
-};
-
-const compactSessionExerciseOrder = async (
-  supabaseUrl: string,
-  serviceRoleKey: string,
-  sessionId: string
-): Promise<void> => {
-  const rows = await fetchSessionExerciseOrderRows(supabaseUrl, serviceRoleKey, sessionId);
-  for (let index = 0; index < rows.length; index += 1) {
-    const expected = index + 1;
-    if (rows[index].order_index === expected) {
-      continue;
-    }
-
-    await updateWorkoutExerciseOrderIndex(supabaseUrl, serviceRoleKey, sessionId, rows[index].id, expected);
-  }
+  return result;
 };
 
 const addWorkoutExerciseWithDefaults = async (
@@ -1075,7 +896,6 @@ const parseCompleteSetPayload = (payload: unknown): CompleteSetPayload | null =>
   const weightLbs = payload.weightLbs;
   const reps = payload.reps;
   const rir = payload.rir;
-  const completedAt = payload.completedAt;
 
   if (
     !isNonBlankString(workoutExerciseId) ||
@@ -1088,8 +908,7 @@ const parseCompleteSetPayload = (payload: unknown): CompleteSetPayload | null =>
     !isValidRir(rir) ||
     typeof reps !== "number" ||
     !Number.isInteger(reps) ||
-    reps <= 0 || // product lock: completed set requires reps > 0
-    !isNonBlankString(completedAt)
+    reps <= 0 // product lock: completed set requires reps > 0
   ) {
     return null;
   }
@@ -1101,8 +920,7 @@ const parseCompleteSetPayload = (payload: unknown): CompleteSetPayload | null =>
     setType,
     weightLbs,
     reps,
-    rir,
-    completedAt: completedAt.trim()
+    rir
   };
 };
 
@@ -1332,7 +1150,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   switch (parsedRequest.action) {
     case "complete_set": {
       const reps = parsedRequest.payload.reps;
-      if (typeof reps !== "number" || reps <= 0 || !isValidIsoDateTime(parsedRequest.payload.completedAt)) {
+      if (typeof reps !== "number" || reps <= 0) {
         return invalidInputResponse();
       }
 
@@ -1366,14 +1184,22 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           return sessionNotActiveResponse();
         }
 
-        const hasSet = await checkWorkoutSetExists(
+        const setState = await loadWorkoutSetState(
           env.supabaseUrl,
           env.supabaseServiceRoleKey,
           parsedRequest.payload.workoutExerciseId,
           parsedRequest.payload.setId
         );
-        if (!hasSet) {
+        if (!setState) {
           return notFoundResponse();
+        }
+
+        if (setState.completed) {
+          return NextResponse.json({
+            ok: true,
+            action: "complete_set",
+            data: { completedAt: setState.completed_at }
+          });
         }
 
         const updated = await updateCompletedSet(env.supabaseUrl, env.supabaseServiceRoleKey, parsedRequest.payload);
@@ -1381,7 +1207,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           return notFoundResponse();
         }
 
-        return NextResponse.json({ ok: true, action: "complete_set" });
+        return NextResponse.json({
+          ok: true,
+          action: "complete_set",
+          data: { completedAt: updated.completed_at }
+        });
       } catch {
         return mutationFailedResponse();
       }
@@ -1493,45 +1323,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
     case "delete_set":
       try {
-        const workoutExercise = await loadWorkoutExerciseOwnership(
+        const result = await deleteWorkoutSetAndCompact(
           env.supabaseUrl,
           env.supabaseServiceRoleKey,
-          parsedRequest.payload.workoutExerciseId
+          sessionCheck.payload.sub,
+          parsedRequest.payload
         );
-        if (!workoutExercise) {
-          return notFoundResponse();
-        }
 
-        const isOwner = await verifySessionOwnership(
-          env.supabaseUrl,
-          env.supabaseServiceRoleKey,
-          workoutExercise.session_id,
-          sessionCheck.payload.sub
-        );
-        if (!isOwner) {
+        if (result.outcome === "not_found_or_forbidden") {
           return forbiddenResponse();
         }
-
-        const isActive = await verifyActiveSessionOwnership(
-          env.supabaseUrl,
-          env.supabaseServiceRoleKey,
-          workoutExercise.session_id,
-          sessionCheck.payload.sub
-        );
-        if (!isActive) {
+        if (result.outcome === "session_not_active") {
           return sessionNotActiveResponse();
         }
-
-        const deleted = await deleteSetById(env.supabaseUrl, env.supabaseServiceRoleKey, parsedRequest.payload);
-        if (!deleted) {
+        if (result.outcome === "set_not_found") {
           return notFoundResponse();
         }
-
-        await renumberSetsDense(
-          env.supabaseUrl,
-          env.supabaseServiceRoleKey,
-          parsedRequest.payload.workoutExerciseId
-        );
+        if (result.outcome !== "deleted") {
+          return mutationFailedResponse();
+        }
 
         return NextResponse.json({
           ok: true,
@@ -1542,47 +1352,37 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
     case "delete_workout_exercises":
       try {
-        const isOwner = await verifySessionOwnership(
+        const result = await deleteWorkoutExercisesAndCompact(
           env.supabaseUrl,
           env.supabaseServiceRoleKey,
-          parsedRequest.payload.sessionId,
-          sessionCheck.payload.sub
+          sessionCheck.payload.sub,
+          parsedRequest.payload
         );
-        if (!isOwner) {
+
+        if (result.outcome === "invalid_input") {
+          return invalidInputResponse();
+        }
+        if (result.outcome === "not_found_or_forbidden") {
           return forbiddenResponse();
         }
-
-        const isActive = await verifyActiveSessionOwnership(
-          env.supabaseUrl,
-          env.supabaseServiceRoleKey,
-          parsedRequest.payload.sessionId,
-          sessionCheck.payload.sub
-        );
-        if (!isActive) {
+        if (result.outcome === "session_not_active") {
           return sessionNotActiveResponse();
         }
-
-        const deletableIds = await fetchSessionWorkoutExerciseIds(
-          env.supabaseUrl,
-          env.supabaseServiceRoleKey,
-          parsedRequest.payload.sessionId,
-          parsedRequest.payload.workoutExerciseIds
-        );
-
-        await deleteSessionWorkoutExercises(
-          env.supabaseUrl,
-          env.supabaseServiceRoleKey,
-          parsedRequest.payload.sessionId,
-          deletableIds
-        );
-
-        await compactSessionExerciseOrder(env.supabaseUrl, env.supabaseServiceRoleKey, parsedRequest.payload.sessionId);
+        if (result.outcome === "exercise_not_found") {
+          return notFoundResponse();
+        }
+        if (result.outcome === "exercise_has_completed_sets") {
+          return NextResponse.json({ ok: false, error: "EXERCISE_HAS_COMPLETED_SETS" }, { status: 409 });
+        }
+        if (result.outcome !== "deleted") {
+          return mutationFailedResponse();
+        }
 
         return NextResponse.json({
           ok: true,
           action: "delete_workout_exercises",
           data: {
-            deletedWorkoutExerciseIds: deletableIds
+            deletedWorkoutExerciseIds: result.deleted_workout_exercise_ids
           }
         });
       } catch {
