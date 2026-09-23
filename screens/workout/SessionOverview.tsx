@@ -7,7 +7,7 @@ import { copyWorkoutToClipboard, formatWorkoutForClipboard, type ClipboardWorkou
 import { ExerciseRow } from "@/components/workout/ExerciseRow";
 import { SupersetRow } from "@/components/workout/SupersetRow";
 import { TimerStrip } from "@/components/workout/TimerStrip";
-import { PUSH_DAY_TEMPLATE_ID } from "@/components/workout/workoutTemplateIds";
+import { fetchWorkoutLibrary } from "@/components/workout/workoutLibraryClient";
 import {
   addSet as persistAddSet,
   completeSet as persistCompleteSet,
@@ -34,6 +34,7 @@ import type {
   WorkoutPreferences,
   WorkoutSession
 } from "@/types/workout";
+import type { WorkoutLibraryItem } from "@/types/workoutLibrary";
 
 const createMockSession = (): WorkoutSession => {
   const now = new Date().toISOString();
@@ -562,6 +563,12 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
   const [finishSessionError, setFinishSessionError] = useState<string | null>(null);
   const [isStartingSession, setIsStartingSession] = useState(false);
   const [startSessionError, setStartSessionError] = useState<string | null>(null);
+  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
+  const [libraryItems, setLibraryItems] = useState<WorkoutLibraryItem[] | null>(null);
+  const [isLibraryLoading, setIsLibraryLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [libraryRetry, setLibraryRetry] = useState(0);
+  const [startingTemplateId, setStartingTemplateId] = useState<string | null>(null);
   const [activeCatalogExerciseIds, setActiveCatalogExerciseIds] = useState<ReadonlySet<string>>(() => new Set());
   const [isEditMode, setIsEditMode] = useState(false);
   const [selectedExerciseIds, setSelectedExerciseIds] = useState<string[]>([]);
@@ -629,6 +636,40 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
   useEffect(() => {
     void refreshSession(true);
   }, [authenticatedUserId, refreshSession]);
+
+  useEffect(() => {
+    if (!isLibraryOpen) {
+      return undefined;
+    }
+
+    let active = true;
+    setIsLibraryLoading(true);
+    setLibraryError(null);
+    setLibraryItems(null);
+
+    void fetchWorkoutLibrary()
+      .then((library) => {
+        if (active) {
+          setLibraryItems(library.items);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setLibraryError(error instanceof Error && error.message === "UNAUTHORIZED"
+            ? "Session expired. Sign in again."
+            : "Could not load workouts. Try again.");
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setIsLibraryLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [isLibraryOpen, libraryRetry]);
 
   useEffect(() => {
     if (!hasActiveSession) {
@@ -976,25 +1017,28 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
     }
   };
 
-  const startWorkoutSession = async (): Promise<void> => {
+  const startWorkoutSession = async (templateId: string): Promise<void> => {
     if (isStartingSession) {
       return;
     }
 
     setIsStartingSession(true);
+    setStartingTemplateId(templateId);
     setStartSessionError(null);
 
     try {
-      await persistStartWorkoutSession(PUSH_DAY_TEMPLATE_ID);
+      await persistStartWorkoutSession(templateId);
       const refreshed = await refreshSession(false);
       if (!refreshed) {
         throw new Error("WORKOUT_START_RECONCILIATION_FAILED");
       }
+      setIsLibraryOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to start a workout.";
       setStartSessionError(message);
     } finally {
       setIsStartingSession(false);
+      setStartingTemplateId(null);
     }
   };
 
@@ -1163,28 +1207,86 @@ export const SessionOverview = ({ authenticatedUserId }: SessionOverviewProps) =
   if (hasActiveSession === false) {
     return (
       <div className="flex h-dvh w-full items-center justify-center bg-[#0d0d0d] px-4 text-[#e8e4dc]">
-        <main className="w-full max-w-[360px] border-2 border-[#2e2e2e] bg-[#141414] p-4 text-center">
-          <p className="font-display text-[22px] font-bold uppercase tracking-[0.08em] text-[#e8e4dc]">
-            No Active Workout
-          </p>
-          <p className="mt-3 font-data text-[13px] text-[#8a8478]">
-            Start a Push Day when you are ready to train.
-          </p>
-          {startSessionError ? (
-            <p className="mt-3 font-data text-[12px] text-[#b84040]" role="alert">
-              {startSessionError}
-            </p>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => {
-              void startWorkoutSession();
-            }}
-            disabled={isStartingSession}
-            className="mt-5 h-12 w-full border-2 border-[#8a6219] bg-[#c8922a] font-display text-[14px] font-bold uppercase tracking-[0.08em] text-[#0d0d0d] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isStartingSession ? "Starting..." : "Start Workout"}
-          </button>
+        <main className="max-h-[85dvh] w-full max-w-[420px] overflow-y-auto border-2 border-[#2e2e2e] bg-[#141414] p-4 text-center">
+          {isLibraryOpen ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLibraryOpen(false);
+                  setStartSessionError(null);
+                }}
+                disabled={isStartingSession}
+                className="mb-4 flex items-center gap-2 rounded-[3px] border-2 border-[#2e2e2e] px-[14px] py-[6px] font-display text-[14px] font-bold uppercase text-[#8a8478] hover:border-[#c8922a] hover:text-[#c8922a] disabled:opacity-60"
+              >
+                ← Back
+              </button>
+              <h2 className="border-b-2 border-[#c8922a] pb-3 text-left font-display text-[22px] font-bold uppercase text-[#e8e4dc]">
+                Workout Library
+              </h2>
+              {isLibraryLoading ? <p className="py-6 font-data text-[13px] text-[#8a8478]">Loading workouts...</p> : null}
+              {libraryError ? (
+                <div className="py-5" role="alert">
+                  <p className="font-data text-[12px] text-[#b84040]">{libraryError}</p>
+                  <button
+                    type="button"
+                    onClick={() => setLibraryRetry((value) => value + 1)}
+                    className="mt-3 rounded-[3px] border border-[#2e2e2e] px-3 py-2 font-display text-[12px] font-bold uppercase text-[#e8e4dc]"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : null}
+              {!isLibraryLoading && !libraryError && libraryItems?.length === 0 ? (
+                <p className="py-6 font-data text-[13px] text-[#8a8478]">No workouts available.</p>
+              ) : null}
+              {startSessionError ? <p className="mt-3 font-data text-[12px] text-[#b84040]" role="alert">{startSessionError}</p> : null}
+              {!isLibraryLoading && !libraryError && libraryItems ? (
+                <div className="mt-3 space-y-2">
+                  {libraryItems.map((workout) => (
+                    <button
+                      key={workout.id}
+                      type="button"
+                      disabled={isStartingSession}
+                      onClick={() => void startWorkoutSession(workout.id)}
+                      className="w-full rounded-[3px] border-2 border-[#2e2e2e] p-3 text-left hover:border-[#c8922a] disabled:opacity-60"
+                    >
+                      <span className="block font-display text-[17px] font-bold uppercase text-[#e8e4dc]">
+                        {startingTemplateId === workout.id ? "Starting..." : workout.name}
+                      </span>
+                      <span className="mt-2 block font-data text-[11px] leading-[1.6] text-[#8a8478]">
+                        {workout.exerciseNames.map((name, index) => `${index + 1}. ${name}`).join(" · ")}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <p className="font-display text-[22px] font-bold uppercase tracking-[0.08em] text-[#e8e4dc]">
+                No Active Workout
+              </p>
+              <p className="mt-3 font-data text-[13px] text-[#8a8478]">
+                Choose a workout when you are ready to train.
+              </p>
+              {startSessionError ? (
+                <p className="mt-3 font-data text-[12px] text-[#b84040]" role="alert">
+                  {startSessionError}
+                </p>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  setStartSessionError(null);
+                  setIsLibraryOpen(true);
+                }}
+                className="mt-5 h-12 w-full border-2 border-[#8a6219] bg-[#c8922a] font-display text-[14px] font-bold uppercase tracking-[0.08em] text-[#0d0d0d] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Start Workout
+              </button>
+            </>
+          )}
         </main>
       </div>
     );
